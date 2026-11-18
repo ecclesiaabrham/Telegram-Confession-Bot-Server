@@ -1382,11 +1382,8 @@ bot.catch(async (error, ctx) => {
 });
 
 async function main() {
-  console.log("[1] Initializing database...");
   await store.init();
-  console.log("[2] Database initialized.");
 
-  console.log("[3] Connecting to Telegram...");
   // A temporary Telegram/API outage should not terminate the bot process.
   // Keep waiting with capped backoff until getMe succeeds or a non-retryable
   // error (such as an invalid token) is returned.
@@ -1396,7 +1393,6 @@ async function main() {
     Infinity,
   );
   bot.botInfo = me;
-  console.log(`[4] Connected as @${me.username}`);
 
   await bot.telegram.setMyCommands(publicCommands);
   if (botOwnerId) {
@@ -1406,9 +1402,7 @@ async function main() {
     );
   }
 
-  console.log("[5] Starting bot polling...");
   const polling = bot.launch();
-  console.log("[6] Polling has started; waiting for Telegram updates.");
 
   removeOldReactionKeyboards().catch((error) => {
     console.error("Could not update older confession buttons:", error);
