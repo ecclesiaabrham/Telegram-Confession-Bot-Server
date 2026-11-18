@@ -9,8 +9,20 @@ Node.js Telegram bot. Members submit in a private chat; submissions are posted d
 3. Run `npm install` in this folder.
 4. Copy `.env.example` to `.env`, set `BOT_TOKEN`, and set `BOT_OWNER_ID` to the bot creator's numeric Telegram user ID. Message the bot privately with `/myid` to see your ID. The creator can privately use `/who <confession ID>` to look up the submitter; other users cannot use that command.
 5. Start the bot with `npm start`.
-6. Add the bot to the Telegram group as an administrator with permission to post and delete its messages. Membership verification uses Telegram's `getChatMember` API, which Telegram guarantees for bots that are administrators in the group. A group administrator runs `/setgroup` in the group. Members then open a private chat with the bot and use `/confess` or `/vent`.
+6. Add the bot to the Telegram group as an administrator with permission to post and delete its messages. Membership verification uses Telegram's `getChatMember` API, which Telegram guarantees for bots that are administrators in the group. The configured bot owner must also be a group administrator and run `/setgroup` in the group. Members then open a private chat with the bot and use `/confess` or `/vent`.
 7. In Telegram's group settings, a group admin opens Group Info > Edit > Reactions and enables reactions, then chooses which reactions members may use. The Bot API cannot change this setting.
+
+## Docker deployment preparation
+
+The repository includes a Dockerfile for Node.js 24 and SQLite persistence. Copy `.env.example` to `.env`, fill in `BOT_TOKEN` and `BOT_OWNER_ID`, then build and run the image with a persistent volume:
+
+```sh
+docker build -t anonymous-confession-bot .
+docker volume create confession-data
+docker run -d --name confession-bot --restart unless-stopped --env-file .env -v confession-data:/data anonymous-confession-bot
+```
+
+The database is stored in `/data/confessions.sqlite3` inside the container, backed by the `confession-data` volume. Keep `.env` private. For MySQL deployments, set `DB_BACKEND=mysql` and provide the `MYSQL_*` settings instead. Run only one polling instance for a bot token.
 
 ## Database
 
@@ -24,7 +36,7 @@ SQLite is the default and stores data in `confessions.sqlite3` (or `DATABASE_PAT
 - `/confess` and `/vent` in private chat, followed by the submission text or a photo with a caption. `/cancel` cancels a pending submission.
 - Each confession has one **Read or add comment (N)** button that opens the thread in a private bot chat. The thread shows five top-level comments per page, with replies under their parent comment. **Prev** and **Next** appear in the footer beneath the comment cards. Top-level comment numbers start at `#1` separately for each confession. Reply cards show **Reply #x->#parent** above the text, with numbering starting at `#1` for each parent. The comment text appears above the author's name, badge, and net likes count; dislikes subtract from likes. Each comment card has **Reply**, **Like**, and **Dislike** buttons; a user can have one vote per comment and can change or remove it. Names include the user's net like score across all their comments. The score badge is 💧 from 5, 🌠 from 10, 🔥 from 20, 🥷 from 25 through 30, and 👼 above 30; lower and negative scores have no badge. Comments written by the confession author show only **Confessor**, without their chosen name or score. After writing a comment or reply, users confirm or cancel before it is saved. Comment text is visible in the bot's thread to group members who open it; the group post displays only the comment count. Comments are text-only. `/cancel` stops a pending comment.
 - `/delete ID` in private chat, or tap **Delete my submission** on the private confirmation after posting. Only the account that submitted it can delete it.
-- `/setgroup` links a group (admin only); `/setrules text` updates its rules (admin only).
+- `/setgroup` links a group; `/unlinkgroup` unlinks it; `/setrules text` changes its rules. These commands are restricted to the configured bot owner, who must also be a group admin.
 - Confessions use Telegram's native message reactions. Members react from their Telegram client after a group admin enables reactions in group settings. The bot does not draw custom reaction buttons or track member reaction totals.
 - Members can reply normally in the group (those replies show their Telegram accounts) or use anonymous comments in the bot's private thread.
 
