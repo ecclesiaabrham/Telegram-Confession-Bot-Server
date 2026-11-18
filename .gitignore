@@ -3,3 +3,4 @@ node_modules/
 confessions.sqlite3
 confessions.sqlite3-shm
 confessions.sqlite3-wal
+.neon

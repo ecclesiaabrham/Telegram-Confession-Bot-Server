@@ -2,6 +2,7 @@ require("dotenv").config();
 
 const { DatabaseSync } = require("node:sqlite");
 const mysql = require("mysql2/promise");
+const { Pool: PostgresPool } = require("pg");
 const { Telegraf, Markup, session } = require("telegraf");
 
 const token = process.env.BOT_TOKEN;
@@ -12,6 +13,7 @@ if (botOwnerId && !/^\d+$/.test(botOwnerId))
   throw new Error("BOT_OWNER_ID must be your numeric Telegram user ID.");
 
 const backend = (process.env.DB_BACKEND || "sqlite").toLowerCase();
+const databaseUrl = process.env.DATABASE_URL;
 const maxLength = Number.parseInt(process.env.MAX_MESSAGE_LENGTH || "3000", 10);
 const cooldownSeconds = Number.parseInt(
   process.env.SUBMISSION_COOLDOWN_SECONDS || "60",
@@ -70,8 +72,18 @@ class Store {
           10,
         ),
       });
+    } else if (backend === "postgres" || backend === "postgresql") {
+      if (!databaseUrl)
+        throw new Error("Set DATABASE_URL when DB_BACKEND=postgres.");
+      this.kind = "postgres";
+      this.pgPool = new PostgresPool({
+        connectionString: databaseUrl,
+        max: Number.parseInt(process.env.PG_POOL_SIZE || "5", 10),
+        idleTimeoutMillis: 30_000,
+        connectionTimeoutMillis: 10_000,
+      });
     } else {
-      throw new Error("DB_BACKEND must be 'sqlite' or 'mysql'.");
+      throw new Error("DB_BACKEND must be 'sqlite', 'mysql', or 'postgres'.");
     }
   }
 
@@ -88,7 +100,20 @@ class Store {
             "CREATE TABLE IF NOT EXISTS user_profiles (user_id BIGINT PRIMARY KEY, display_name VARCHAR(64) NOT NULL, name_key VARCHAR(64) NOT NULL UNIQUE)",
             "CREATE TABLE IF NOT EXISTS bot_sessions (session_key VARCHAR(255) PRIMARY KEY, data LONGTEXT NOT NULL, updated_at BIGINT NOT NULL)",
           ]
-        : [
+        : this.kind === "postgres"
+          ? [
+            'CREATE TABLE IF NOT EXISTS "groups" (chat_id BIGINT PRIMARY KEY, title VARCHAR(255) NOT NULL, rules TEXT NOT NULL, linked_at BIGINT NOT NULL)',
+            "CREATE TABLE IF NOT EXISTS confessions (id BIGSERIAL PRIMARY KEY, owner_id BIGINT NOT NULL, owner_username VARCHAR(255), owner_first_name VARCHAR(255), owner_last_name VARCHAR(255), chat_id BIGINT NOT NULL, message_id BIGINT, kind VARCHAR(32) NOT NULL, body TEXT NOT NULL, created_at BIGINT NOT NULL, deleted SMALLINT NOT NULL DEFAULT 0)",
+            "CREATE TABLE IF NOT EXISTS submissions (owner_id BIGINT NOT NULL, created_at BIGINT NOT NULL)",
+            "CREATE INDEX IF NOT EXISTS submissions_owner_time ON submissions(owner_id, created_at)",
+            "CREATE TABLE IF NOT EXISTS anonymous_comments (id BIGSERIAL PRIMARY KEY, confession_id BIGINT NOT NULL, commenter_id BIGINT NOT NULL, parent_id BIGINT, body TEXT NOT NULL, message_id BIGINT, created_at BIGINT NOT NULL, deleted SMALLINT NOT NULL DEFAULT 0)",
+            "CREATE INDEX IF NOT EXISTS comments_user_time ON anonymous_comments(commenter_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS comments_thread ON anonymous_comments(confession_id, parent_id, deleted)",
+            "CREATE TABLE IF NOT EXISTS comment_reactions (comment_id BIGINT NOT NULL, user_id BIGINT NOT NULL, reaction VARCHAR(8) NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY(comment_id, user_id))",
+            "CREATE TABLE IF NOT EXISTS user_profiles (user_id BIGINT PRIMARY KEY, display_name VARCHAR(64) NOT NULL, name_key VARCHAR(64) NOT NULL UNIQUE)",
+            "CREATE TABLE IF NOT EXISTS bot_sessions (session_key VARCHAR(255) PRIMARY KEY, data TEXT NOT NULL, updated_at BIGINT NOT NULL)",
+          ]
+          : [
             "CREATE TABLE IF NOT EXISTS `groups` (chat_id INTEGER PRIMARY KEY, title TEXT NOT NULL, rules TEXT NOT NULL, linked_at INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS confessions (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER NOT NULL, owner_username TEXT, owner_first_name TEXT, owner_last_name TEXT, chat_id INTEGER NOT NULL, message_id INTEGER, kind TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0)",
             "CREATE TABLE IF NOT EXISTS submissions (owner_id INTEGER NOT NULL, created_at INTEGER NOT NULL)",
@@ -104,10 +129,14 @@ class Store {
     const confessionColumns =
       this.kind === "sqlite"
         ? await this.all("PRAGMA table_info(confessions)")
-        : await this.all("SHOW COLUMNS FROM confessions");
+        : this.kind === "mysql"
+          ? await this.all("SHOW COLUMNS FROM confessions")
+          : await this.all(
+              "SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'confessions'",
+            );
     const hasConfessionColumn = (name) =>
       confessionColumns.some((column) =>
-        this.kind === "sqlite" ? column.name === name : column.Field === name,
+        this.kind === "mysql" ? column.Field === name : column.name === name,
       );
     const profileColumns =
       this.kind === "mysql"
@@ -116,11 +145,13 @@ class Store {
             ["owner_first_name", "VARCHAR(255) NULL"],
             ["owner_last_name", "VARCHAR(255) NULL"],
           ]
-        : [
+        : this.kind === "sqlite"
+          ? [
             ["owner_username", "TEXT"],
             ["owner_first_name", "TEXT"],
             ["owner_last_name", "TEXT"],
-          ];
+          ]
+          : [];
     for (const [name, type] of profileColumns) {
       if (!hasConfessionColumn(name))
         await this.run(`ALTER TABLE confessions ADD COLUMN ${name} ${type}`);
@@ -132,7 +163,7 @@ class Store {
           "ALTER TABLE `groups` ADD COLUMN linked_at INTEGER NOT NULL DEFAULT 0",
         );
       }
-    } else {
+    } else if (this.kind === "mysql") {
       const columns = await this.all("SHOW COLUMNS FROM `groups`");
       if (!columns.some((column) => column.Field === "linked_at")) {
         await this.run(
@@ -143,11 +174,17 @@ class Store {
     const commentColumns =
       this.kind === "sqlite"
         ? await this.all("PRAGMA table_info(anonymous_comments)")
-        : await this.all("SHOW COLUMNS FROM anonymous_comments");
+        : this.kind === "mysql"
+          ? await this.all("SHOW COLUMNS FROM anonymous_comments")
+          : await this.all(
+              "SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'anonymous_comments'",
+            );
     const hasParentId =
       this.kind === "sqlite"
         ? commentColumns.some((column) => column.name === "parent_id")
-        : commentColumns.some((column) => column.Field === "parent_id");
+        : this.kind === "mysql"
+          ? commentColumns.some((column) => column.Field === "parent_id")
+          : commentColumns.some((column) => column.name === "parent_id");
     if (!hasParentId) {
       await this.run(
         this.kind === "sqlite"
@@ -155,7 +192,7 @@ class Store {
           : "ALTER TABLE anonymous_comments ADD COLUMN parent_id BIGINT NULL",
       );
     }
-    if (this.kind === "sqlite") {
+    if (this.kind === "sqlite" || this.kind === "postgres") {
       await this.run(
         "CREATE INDEX IF NOT EXISTS comments_thread ON anonymous_comments(confession_id, parent_id, deleted)",
       );
@@ -164,18 +201,30 @@ class Store {
 
   async run(sql, params = []) {
     if (this.kind === "sqlite") return this.db.prepare(sql).run(...params);
+    if (this.kind === "postgres") {
+      const result = await this.pgPool.query(toPostgresSql(sql), params);
+      return { rowCount: result.rowCount, lastInsertRowid: result.rows[0]?.id };
+    }
     const [result] = await this.pool.execute(sql, params);
     return result;
   }
 
   async get(sql, params = []) {
     if (this.kind === "sqlite") return this.db.prepare(sql).get(...params);
+    if (this.kind === "postgres") {
+      const result = await this.pgPool.query(toPostgresSql(sql), params);
+      return result.rows[0];
+    }
     const [rows] = await this.pool.execute(sql, params);
     return rows[0];
   }
 
   async all(sql, params = []) {
     if (this.kind === "sqlite") return this.db.prepare(sql).all(...params);
+    if (this.kind === "postgres") {
+      const result = await this.pgPool.query(toPostgresSql(sql), params);
+      return result.rows;
+    }
     const [rows] = await this.pool.execute(sql, params);
     return rows;
   }
@@ -217,8 +266,16 @@ class Store {
 
   async close() {
     if (this.kind === "sqlite") this.db.close();
-    else await this.pool.end();
+    else if (this.kind === "mysql") await this.pool.end();
+    else await this.pgPool.end();
   }
+}
+
+function toPostgresSql(sql) {
+  let index = 0;
+  return sql
+    .replace(/`([^`]+)`/g, '"$1"')
+    .replace(/\?/g, () => `$${++index}`);
 }
 
 function requiredEnv(name) {
@@ -541,6 +598,7 @@ bot.command("name", async (ctx) => {
   } catch (error) {
     if (
       String(error.code || "").includes("CONSTRAINT") ||
+      error.code === "23505" ||
       error.code === "ER_DUP_ENTRY"
     ) {
       return ctx.reply("That name is already taken. Please choose another.");
@@ -1223,7 +1281,7 @@ async function submit(ctx, body, photoFileId = null) {
     return explainMembershipFailure(ctx, membership.unavailable);
   }
   const result = await store.run(
-    "INSERT INTO confessions(owner_id,owner_username,owner_first_name,owner_last_name,chat_id,kind,body,created_at) VALUES(?,?,?,?,?,?,?,?)",
+    `INSERT INTO confessions(owner_id,owner_username,owner_first_name,owner_last_name,chat_id,kind,body,created_at) VALUES(?,?,?,?,?,?,?,?)${store.kind === "postgres" ? " RETURNING id" : ""}`,
     [
       userId,
       ctx.from.username || null,

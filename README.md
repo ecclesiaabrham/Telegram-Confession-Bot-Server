@@ -28,7 +28,9 @@ The bot automatically removes confessions, comments, comment reactions, rate-lim
 
 ## Database
 
-SQLite is the default and stores data in `confessions.sqlite3` (or `DATABASE_PATH`). For MySQL, create a database and user, set `DB_BACKEND=mysql`, and fill in `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, and `MYSQL_DATABASE`. The bot creates its tables at startup. `MYSQL_POOL_SIZE` can tune the connection pool.
+SQLite is the default and stores data in `confessions.sqlite3` (or `DATABASE_PATH`). For MySQL, create a database and user, set `DB_BACKEND=mysql`, and fill in `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, and `MYSQL_DATABASE`. For Neon, set `DB_BACKEND=postgres` and use the pooled `DATABASE_URL` supplied by Neon. `PG_POOL_SIZE` controls the PostgreSQL connection pool. The bot creates its tables at startup for each backend.
+
+The Neon adapter uses `pg` with a small reusable connection pool, which suits this long-running Node.js bot. Neon provisioning supplies the pooled application `DATABASE_URL`; use direct connection strings for administrative or migration tools. Switching the backend does not migrate the existing SQLite or MySQL records into Neon.
 
 ## Commands and features
 

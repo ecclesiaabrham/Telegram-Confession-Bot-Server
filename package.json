@@ -5,14 +5,20 @@
   "description": "Anonymous confession and venting bot for Telegram groups",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "build": "node --check bot.js"
   },
   "engines": {
     "node": ">=24"
   },
   "dependencies": {
+    "@neon/env": "^2.1.6",
     "dotenv": "^16.4.0",
     "mysql2": "^3.11.0",
+    "pg": "^8.23.1",
     "telegraf": "^4.16.0"
+  },
+  "devDependencies": {
+    "@neon/config": "^1.14.3"
   }
 }
