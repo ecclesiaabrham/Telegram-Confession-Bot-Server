@@ -21,6 +21,12 @@ const maxPerHour = Number.parseInt(
   process.env.MAX_SUBMISSIONS_PER_HOUR || "5",
   10,
 );
+const dataRetentionDays = Number.parseInt(
+  process.env.DATA_RETENTION_DAYS || "21",
+  10,
+);
+if (!Number.isInteger(dataRetentionDays) || dataRetentionDays < 1)
+  throw new Error("DATA_RETENTION_DAYS must be a positive whole number.");
 const defaultRules =
   "Be respectful. Do not post threats, targeted harassment, identifying details, or private information about someone else. Confessions are anonymous to group members. Telegram ensures your privacy. Use /help for commands.";
 
@@ -982,6 +988,48 @@ async function removeOldReactionKeyboards() {
   }
 }
 
+let cleanupRunning = false;
+
+async function cleanExpiredData() {
+  if (cleanupRunning) return;
+  cleanupRunning = true;
+  try {
+    const cutoff = nowSeconds() - dataRetentionDays * 24 * 60 * 60;
+    const expiredPosts = await store.all(
+      "SELECT id, chat_id, message_id FROM confessions WHERE created_at < ? AND deleted = 0 AND message_id IS NOT NULL",
+      [cutoff],
+    );
+
+    for (const post of expiredPosts) {
+      try {
+        await bot.telegram.editMessageReplyMarkup(
+          post.chat_id,
+          post.message_id,
+          undefined,
+          { inline_keyboard: [] },
+        );
+      } catch (error) {
+        console.error(`Could not remove expired confession buttons for ${post.id}:`, error);
+      }
+      await wait(100);
+    }
+
+    await store.run(
+      "DELETE FROM comment_reactions WHERE comment_id IN (SELECT id FROM anonymous_comments WHERE created_at < ? OR confession_id IN (SELECT id FROM confessions WHERE created_at < ?))",
+      [cutoff, cutoff],
+    );
+    await store.run(
+      "DELETE FROM anonymous_comments WHERE created_at < ? OR confession_id IN (SELECT id FROM confessions WHERE created_at < ?)",
+      [cutoff, cutoff],
+    );
+    await store.run("DELETE FROM confessions WHERE created_at < ?", [cutoff]);
+    await store.run("DELETE FROM submissions WHERE created_at < ?", [cutoff]);
+    await store.run("DELETE FROM bot_sessions WHERE updated_at < ?", [cutoff]);
+  } finally {
+    cleanupRunning = false;
+  }
+}
+
 bot.command("comment", async (ctx) => {
   if (!isPrivate(ctx))
     return ctx.reply("Use /comment <ID> in a private chat with me.");
@@ -1401,6 +1449,13 @@ async function main() {
       { scope: { type: "chat", chat_id: Number(botOwnerId) } },
     );
   }
+
+  await cleanExpiredData();
+  setInterval(() => {
+    cleanExpiredData().catch((error) => {
+      console.error("Scheduled database cleanup failed:", error);
+    });
+  }, dataRetentionDays * 24 * 60 * 60 * 1000).unref();
 
   const polling = bot.launch();
 

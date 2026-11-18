@@ -24,6 +24,8 @@ docker run -d --name confession-bot --restart unless-stopped --env-file .env -v 
 
 The database is stored in `/data/confessions.sqlite3` inside the container, backed by the `confession-data` volume. Keep `.env` private. For MySQL deployments, set `DB_BACKEND=mysql` and provide the `MYSQL_*` settings instead. Run only one polling instance for a bot token.
 
+The bot automatically removes confessions, comments, comment reactions, rate-limit history, and expired pending sessions older than 21 days. It runs cleanup at startup and every 21 days while running. Set `DATA_RETENTION_DAYS` to change the retention period. Group configuration and user display names are retained. Expired group confession posts stay in Telegram, but the bot tries to remove their comment buttons before deleting their database records.
+
 ## Database
 
 SQLite is the default and stores data in `confessions.sqlite3` (or `DATABASE_PATH`). For MySQL, create a database and user, set `DB_BACKEND=mysql`, and fill in `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, and `MYSQL_DATABASE`. The bot creates its tables at startup. `MYSQL_POOL_SIZE` can tune the connection pool.
