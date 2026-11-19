@@ -32,6 +32,12 @@ if (!Number.isInteger(dataRetentionDays) || dataRetentionDays < 1)
 const defaultRules =
   "Be respectful. Do not post threats, targeted harassment, identifying details, or private information about someone else. Confessions are anonymous to group members. Telegram ensures your privacy. Use /help for commands.";
 
+const groupTopicCommands = [
+  { command: "settopic", description: "Set the confession topic" },
+  { command: "removetopic", description: "Use general chat for confessions" },
+  { command: "grouptopic", description: "Show the confession topic" },
+];
+
 const publicCommands = [
   { command: "start", description: "Get started" },
   { command: "help", description: "Show available commands" },
@@ -44,6 +50,7 @@ const publicCommands = [
   { command: "rules", description: "Show group rules" },
   { command: "comments", description: "View comments on a confession" },
   { command: "comment", description: "Add an anonymous comment" },
+  ...groupTopicCommands,
 ];
 
 const ownerCommands = [
@@ -91,7 +98,7 @@ class Store {
     const statements =
       this.kind === "mysql"
         ? [
-            "CREATE TABLE IF NOT EXISTS `groups` (chat_id BIGINT PRIMARY KEY, title VARCHAR(255) NOT NULL, rules TEXT NOT NULL, linked_at BIGINT NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS `groups` (chat_id BIGINT PRIMARY KEY, title VARCHAR(255) NOT NULL, rules TEXT NOT NULL, linked_at BIGINT NOT NULL, topic_id BIGINT NULL, topic_name TEXT NULL)",
             "CREATE TABLE IF NOT EXISTS confessions (id BIGINT PRIMARY KEY AUTO_INCREMENT, owner_id BIGINT NOT NULL, owner_username VARCHAR(255) NULL, owner_first_name VARCHAR(255) NULL, owner_last_name VARCHAR(255) NULL, chat_id BIGINT NOT NULL, message_id BIGINT NULL, kind VARCHAR(32) NOT NULL, body LONGTEXT NOT NULL, created_at BIGINT NOT NULL, deleted TINYINT NOT NULL DEFAULT 0)",
             "CREATE TABLE IF NOT EXISTS submissions (owner_id BIGINT NOT NULL, created_at BIGINT NOT NULL, INDEX submissions_owner_time (owner_id, created_at))",
             "DROP TABLE IF EXISTS reactions",
@@ -102,7 +109,7 @@ class Store {
           ]
         : this.kind === "postgres"
           ? [
-            'CREATE TABLE IF NOT EXISTS "groups" (chat_id BIGINT PRIMARY KEY, title VARCHAR(255) NOT NULL, rules TEXT NOT NULL, linked_at BIGINT NOT NULL)',
+            'CREATE TABLE IF NOT EXISTS "groups" (chat_id BIGINT PRIMARY KEY, title VARCHAR(255) NOT NULL, rules TEXT NOT NULL, linked_at BIGINT NOT NULL, topic_id BIGINT NULL, topic_name TEXT NULL)',
             "CREATE TABLE IF NOT EXISTS confessions (id BIGSERIAL PRIMARY KEY, owner_id BIGINT NOT NULL, owner_username VARCHAR(255), owner_first_name VARCHAR(255), owner_last_name VARCHAR(255), chat_id BIGINT NOT NULL, message_id BIGINT, kind VARCHAR(32) NOT NULL, body TEXT NOT NULL, created_at BIGINT NOT NULL, deleted SMALLINT NOT NULL DEFAULT 0)",
             "CREATE TABLE IF NOT EXISTS submissions (owner_id BIGINT NOT NULL, created_at BIGINT NOT NULL)",
             "CREATE INDEX IF NOT EXISTS submissions_owner_time ON submissions(owner_id, created_at)",
@@ -114,7 +121,7 @@ class Store {
             "CREATE TABLE IF NOT EXISTS bot_sessions (session_key VARCHAR(255) PRIMARY KEY, data TEXT NOT NULL, updated_at BIGINT NOT NULL)",
           ]
           : [
-            "CREATE TABLE IF NOT EXISTS `groups` (chat_id INTEGER PRIMARY KEY, title TEXT NOT NULL, rules TEXT NOT NULL, linked_at INTEGER NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS `groups` (chat_id INTEGER PRIMARY KEY, title TEXT NOT NULL, rules TEXT NOT NULL, linked_at INTEGER NOT NULL, topic_id BIGINT NULL, topic_name TEXT NULL)",
             "CREATE TABLE IF NOT EXISTS confessions (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER NOT NULL, owner_username TEXT, owner_first_name TEXT, owner_last_name TEXT, chat_id INTEGER NOT NULL, message_id INTEGER, kind TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0)",
             "CREATE TABLE IF NOT EXISTS submissions (owner_id INTEGER NOT NULL, created_at INTEGER NOT NULL)",
             "CREATE INDEX IF NOT EXISTS submissions_owner_time ON submissions(owner_id, created_at)",
@@ -170,6 +177,17 @@ class Store {
           "ALTER TABLE `groups` ADD COLUMN linked_at BIGINT NOT NULL DEFAULT 0",
         );
       }
+    }
+    const groupColumns = this.kind === "sqlite"
+      ? await this.all("PRAGMA table_info(`groups`)")
+      : this.kind === "mysql"
+        ? await this.all("SHOW COLUMNS FROM `groups`")
+        : await this.all("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'groups'");
+    const hasGroupColumn = (name) => groupColumns.some((column) =>
+      this.kind === "mysql" ? column.Field === name : column.name === name,
+    );
+    for (const [name, type] of [["topic_id", "BIGINT NULL"], ["topic_name", "TEXT NULL"]]) {
+      if (!hasGroupColumn(name)) await this.run(`ALTER TABLE \`groups\` ADD COLUMN ${name} ${type}`);
     }
     const commentColumns =
       this.kind === "sqlite"
@@ -441,6 +459,153 @@ async function withTelegramRetry(operation, description, attempts = 5) {
 
 const store = new Store();
 const bot = new Telegraf(token);
+const topicSetups = new Map();
+const topicSetupTimeoutMs = 10 * 60 * 1000;
+
+function topicChoiceKeyboard() {
+  return Markup.inlineKeyboard([[
+    Markup.button.callback("Create confession topic", "topic:create"),
+    Markup.button.callback("Use general chat", "topic:general"),
+  ]]);
+}
+
+function isGroupChat(ctx) {
+  return ["group", "supergroup"].includes(ctx.chat?.type);
+}
+
+async function linkedGroupForChat(chatId) {
+  return store.get("SELECT chat_id, topic_id, topic_name FROM `groups` WHERE chat_id = ? AND linked_at > 0", [chatId]);
+}
+
+async function authorizeTopicAdmin(ctx) {
+  if (!isGroupChat(ctx)) {
+    await ctx.reply("Run this command inside the linked group.");
+    return false;
+  }
+  if (isBotOwner(ctx)) return true;
+  try {
+    const member = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id);
+    if (["administrator", "creator"].includes(member.status)) return true;
+  } catch {
+    await ctx.reply("I could not verify your group administrator permissions. Try again later.");
+    return false;
+  }
+  await ctx.reply("Only group administrators or the bot owner can manage the confession topic.");
+  return false;
+}
+
+async function promptForTopic(ctx) {
+  const chatId = String(ctx.chat.id);
+  const current = topicSetups.get(chatId);
+  if (current) {
+    if (current.userId === String(ctx.from.id))
+      return ctx.reply("Topic setup is already in progress. Send the topic name or /cancel.");
+    return ctx.reply("Another administrator is already setting up the confession topic. Please wait for them to finish or cancel.");
+  }
+  const linked = await linkedGroupForChat(ctx.chat.id);
+  if (!linked) return ctx.reply("This group is not linked. The bot owner can link it with /setgroup.");
+  const setup = { userId: String(ctx.from.id), chatId, expiresAt: Date.now() + topicSetupTimeoutMs };
+  setup.timer = setTimeout(async () => {
+    if (topicSetups.get(chatId) !== setup) return;
+    topicSetups.delete(chatId);
+    try { await ctx.telegram.sendMessage(ctx.chat.id, "Topic setup expired because no topic name was provided. Run /settopic to try again."); } catch {}
+  }, topicSetupTimeoutMs);
+  setup.timer.unref?.();
+  topicSetups.set(chatId, setup);
+  return ctx.reply("Enter a topic name for anonymous confessions (1–128 characters). Send /cancel to stop.", { reply_markup: { force_reply: true, selective: true } });
+}
+
+async function clearTopicSetup(chatId) {
+  const setup = topicSetups.get(String(chatId));
+  if (setup?.timer) clearTimeout(setup.timer);
+  topicSetups.delete(String(chatId));
+}
+
+async function saveGeneralChat(ctx) {
+  try {
+    await store.run("UPDATE `groups` SET topic_id = NULL, topic_name = NULL WHERE chat_id = ? AND linked_at > 0", [ctx.chat.id]);
+  } finally {
+    await clearTopicSetup(ctx.chat.id);
+  }
+  return ctx.reply("Confessions will be published in this group's general chat.");
+}
+
+async function handleTopicSetupText(ctx) {
+  const setup = topicSetups.get(String(ctx.chat.id));
+  if (!setup || setup.userId !== String(ctx.from.id)) return false;
+  if (Date.now() > setup.expiresAt) {
+    await clearTopicSetup(ctx.chat.id);
+    await ctx.reply("Topic setup expired. Run /settopic to try again.");
+    return true;
+  }
+  const name = (ctx.message.text || "").trim();
+  if (/^\/cancel(?:@\w+)?(?:\s|$)/i.test(name)) {
+    await clearTopicSetup(ctx.chat.id);
+    await ctx.reply("Topic setup cancelled.");
+    return true;
+  }
+  if (name.startsWith("/")) return false;
+  if (!name || [...name].length > 128 || /[\r\n\u0000-\u001f\u007f]/.test(name)) {
+    await ctx.reply("Telegram topic names must contain 1–128 characters on one line. Try again or send /cancel.");
+    return true;
+  }
+  let linked;
+  try {
+    linked = await linkedGroupForChat(ctx.chat.id);
+  } catch (error) {
+    await clearTopicSetup(ctx.chat.id);
+    console.error("Could not check the linked group during topic setup:", error?.code || "database error");
+    await ctx.reply("I could not check the group configuration. Topic setup was cleared; please try /settopic again later.");
+    return true;
+  }
+  if (!linked) {
+    await clearTopicSetup(ctx.chat.id);
+    await ctx.reply("This group is no longer linked. Topic setup was cancelled.");
+    return true;
+  }
+  try {
+    const chat = await ctx.telegram.getChat(ctx.chat.id);
+    if (chat.type !== "supergroup" || !chat.is_forum) {
+      await clearTopicSetup(ctx.chat.id);
+      await ctx.reply("This group does not have forum topics enabled. Enable Topics in the supergroup settings, then run /settopic again. You can use /removetopic to publish in general chat.");
+      return true;
+    }
+    const botMember = await ctx.telegram.getChatMember(ctx.chat.id, bot.botInfo.id);
+    if (botMember.status !== "administrator") {
+      await clearTopicSetup(ctx.chat.id);
+      await ctx.reply("I must be a group administrator to create confession topics. Promote me to administrator, then run /settopic again.");
+      return true;
+    }
+    if (!botMember.can_manage_topics) {
+      await clearTopicSetup(ctx.chat.id);
+      await ctx.reply("I do not have permission to manage topics. Grant me the Manage Topics administrator permission, then try again.");
+      return true;
+    }
+    const topic = await ctx.telegram.createForumTopic(ctx.chat.id, name);
+    try {
+      const saved = await store.run("UPDATE `groups` SET topic_id = ?, topic_name = ? WHERE chat_id = ? AND linked_at > 0", [topic.message_thread_id, name, ctx.chat.id]);
+      if (saved.rowCount === 0 || saved.affectedRows === 0 || saved.changes === 0) throw new Error("The linked group row was not updated.");
+    } catch (dbError) {
+      try { await ctx.telegram.callApi("deleteForumTopic", { chat_id: ctx.chat.id, message_thread_id: topic.message_thread_id }); }
+      catch (cleanupError) { console.error("Could not remove an unconfigured confession topic after a database error:", cleanupError?.response?.error_code || cleanupError?.code || "Telegram API error"); }
+      console.error("Could not save the configured confession topic:", dbError?.code || "database error");
+      await clearTopicSetup(ctx.chat.id);
+      await ctx.reply("Telegram created the topic, but I could not save it. I tried to remove the unused topic. Please check the topic list and database, then run /settopic again.");
+      return true;
+    }
+    await clearTopicSetup(ctx.chat.id);
+    await ctx.reply(`Confessions will now be published in the “${name}” topic.`);
+    return true;
+  } catch (error) {
+    await clearTopicSetup(ctx.chat.id);
+    const description = String(error?.response?.description || error?.description || "");
+    console.error("Could not create confession topic:", error?.response?.error_code || error?.code || "Telegram API error");
+    await ctx.reply(/not enough rights|administrator|manage topics/i.test(description)
+      ? "I could not create the topic because I lack permission to manage topics. Grant that permission and try /settopic again."
+      : "Telegram could not create the topic. Check the group’s forum settings and topic name, then run /settopic again.");
+    return true;
+  }
+}
 
 bot.use(
   session({
@@ -538,7 +703,7 @@ bot.help((ctx) =>
     "/start — get started\n/confess — submit a confession privately\n/vent — submit a vent privately\n/myid — show your Telegram user ID\n" +
       "/delete <ID> — request deletion of your submission\n/rules — show group rules\n" +
       "/comments <ID> views comments; /comment <ID> adds one anonymously; /name <name> sets your unique display name.\n" +
-      "Use Telegram's built-in reactions on group posts. Use Read or add comment to open the private thread; the group shows only the comment count. Group replies display the author's Telegram account.",
+      "Use Telegram's built-in reactions on group posts. Use Read or add comment to open the private thread; the group shows only the comment count. Group replies display the author's Telegram account. Group admins can use /settopic, /removetopic, and /grouptopic to manage the confession destination.",
   ),
 );
 
@@ -635,8 +800,50 @@ bot.command("setgroup", async (ctx) => {
     );
   }
   return ctx.reply(
-    "This group is linked. Members can now submit privately to the bot. To enable native reactions, a group admin must allow reactions in the group's Telegram settings.",
+    "This group is linked. Members can now submit privately to the bot. To enable native reactions, a group admin must allow reactions in the group's Telegram settings.\n\nWould you like to create a dedicated topic for anonymous confessions?",
+    topicChoiceKeyboard(),
   );
+});
+
+bot.action(/^topic:(create|general)$/, async (ctx) => {
+  if (!await authorizeTopicAdmin(ctx)) {
+    await ctx.answerCbQuery("Only group administrators can choose the confession destination.", { show_alert: true });
+    return;
+  }
+  if (!await linkedGroupForChat(ctx.chat.id)) {
+    await ctx.answerCbQuery("This group is not linked.", { show_alert: true });
+    return;
+  }
+  const activeSetup = topicSetups.get(String(ctx.chat.id));
+  if (activeSetup && activeSetup.userId !== String(ctx.from.id)) {
+    await ctx.answerCbQuery("Another administrator is already setting up the confession topic.", { show_alert: true });
+    return;
+  }
+  await ctx.answerCbQuery();
+  if (ctx.match[1] === "general") return saveGeneralChat(ctx);
+  return promptForTopic(ctx);
+});
+
+bot.command("settopic", async (ctx) => {
+  if (!await authorizeTopicAdmin(ctx)) return;
+  if (!await linkedGroupForChat(ctx.chat.id)) return ctx.reply("This group is not linked to the bot.");
+  return promptForTopic(ctx);
+});
+
+bot.command("removetopic", async (ctx) => {
+  if (!await authorizeTopicAdmin(ctx)) return;
+  if (!await linkedGroupForChat(ctx.chat.id)) return ctx.reply("This group is not linked to the bot.");
+  await clearTopicSetup(ctx.chat.id);
+  await store.run("UPDATE `groups` SET topic_id = NULL, topic_name = NULL WHERE chat_id = ?", [ctx.chat.id]);
+  return ctx.reply("The confession topic was removed. New confessions will be published in the general chat.");
+});
+
+bot.command("grouptopic", async (ctx) => {
+  if (!await authorizeTopicAdmin(ctx)) return;
+  const linked = await linkedGroupForChat(ctx.chat.id);
+  if (!linked) return ctx.reply("This group is not linked to the bot.");
+  if (linked.topic_id == null) return ctx.reply("Confessions are currently published in the general chat.");
+  return ctx.reply(`Confessions are currently published in the “${linked.topic_name || "configured topic"}” topic (ID ${linked.topic_id}).`);
 });
 
 bot.command("unlinkgroup", async (ctx) => {
@@ -1111,6 +1318,10 @@ bot.action(/^addcomment:(\d+)$/, async (ctx) => {
 bot.command("confess", (ctx) => beginSubmission(ctx, "confession"));
 bot.command("vent", (ctx) => beginSubmission(ctx, "vent"));
 bot.command("cancel", async (ctx) => {
+  if (isGroupChat(ctx) && topicSetups.get(String(ctx.chat.id))?.userId === String(ctx.from.id)) {
+    await clearTopicSetup(ctx.chat.id);
+    return ctx.reply("Topic setup cancelled.");
+  }
   clearPending(ctx);
   return ctx.reply("Submission cancelled.");
 });
@@ -1266,7 +1477,7 @@ async function submit(ctx, body, photoFileId = null) {
   const kind = ctx.session.pendingKind;
   const targetChat = ctx.session.targetChat;
   const linkedGroup = await store.get(
-    "SELECT chat_id FROM `groups` WHERE linked_at > 0 ORDER BY linked_at DESC LIMIT 1",
+    "SELECT chat_id, topic_id FROM `groups` WHERE linked_at > 0 ORDER BY linked_at DESC LIMIT 1",
   );
   if (!linkedGroup || String(linkedGroup.chat_id) !== String(targetChat)) {
     clearPending(ctx);
@@ -1300,16 +1511,19 @@ async function submit(ctx, body, photoFileId = null) {
   ]);
   const label = kind === "confession" ? "Confession" : "Vent";
   const content = `<b>${label} #${id}</b>\n\n${escapeHtml(body)}`;
+  const topicOptions = linkedGroup.topic_id == null ? {} : { message_thread_id: Number(linkedGroup.topic_id) };
 
   try {
     const posted = photoFileId
       ? await ctx.telegram.sendPhoto(targetChat, photoFileId, {
           caption: content,
           parse_mode: "HTML",
+          ...topicOptions,
           ...commentsKeyboard(id, 0),
         })
       : await ctx.telegram.sendMessage(targetChat, content, {
           parse_mode: "HTML",
+          ...topicOptions,
           ...commentsKeyboard(id, 0),
         });
     await store.run("UPDATE confessions SET message_id = ? WHERE id = ?", [
@@ -1435,8 +1649,9 @@ bot.action("commentcancel", async (ctx) => {
   return ctx.reply("Comment cancelled; it was not posted.");
 });
 
-bot.on("text", (ctx, next) => {
+bot.on("text", async (ctx, next) => {
   if (ctx.message.text.startsWith("/")) return next();
+  if (isGroupChat(ctx) && await handleTopicSetupText(ctx)) return;
   if (ctx.session?.pendingCommentId)
     return submitComment(ctx, ctx.message.text);
   return submit(ctx, ctx.message.text);
