@@ -33,9 +33,12 @@ const defaultRules =
   "Be respectful. Do not post threats, targeted harassment, identifying details, or private information about someone else. Confessions are anonymous to group members. Telegram ensures your privacy. Use /help for commands.";
 
 const groupTopicCommands = [
-  { command: "settopic", description: "Set the confession topic" },
-  { command: "removetopic", description: "Use general chat for confessions" },
   { command: "grouptopic", description: "Show the confession topic" },
+];
+
+const ownerTopicCommands = [
+  { command: "settopic", description: "Set the confession topic (bot owner only)" },
+  { command: "removetopic", description: "Use general chat for confessions (bot owner only)" },
 ];
 
 const publicCommands = [
@@ -98,8 +101,8 @@ class Store {
     const statements =
       this.kind === "mysql"
         ? [
-            "CREATE TABLE IF NOT EXISTS `groups` (chat_id BIGINT PRIMARY KEY, title VARCHAR(255) NOT NULL, rules TEXT NOT NULL, linked_at BIGINT NOT NULL, topic_id BIGINT NULL, topic_name TEXT NULL)",
-            "CREATE TABLE IF NOT EXISTS confessions (id BIGINT PRIMARY KEY AUTO_INCREMENT, owner_id BIGINT NOT NULL, owner_username VARCHAR(255) NULL, owner_first_name VARCHAR(255) NULL, owner_last_name VARCHAR(255) NULL, chat_id BIGINT NOT NULL, message_id BIGINT NULL, kind VARCHAR(32) NOT NULL, body LONGTEXT NOT NULL, created_at BIGINT NOT NULL, deleted TINYINT NOT NULL DEFAULT 0)",
+            "CREATE TABLE IF NOT EXISTS `groups` (chat_id BIGINT PRIMARY KEY, title VARCHAR(255) NOT NULL, rules TEXT NOT NULL, linked_at BIGINT NOT NULL, topic_id BIGINT NULL, topic_name TEXT NULL, next_confession_number BIGINT NOT NULL DEFAULT 1)",
+            "CREATE TABLE IF NOT EXISTS confessions (id BIGINT PRIMARY KEY AUTO_INCREMENT, owner_id BIGINT NOT NULL, owner_username VARCHAR(255) NULL, owner_first_name VARCHAR(255) NULL, owner_last_name VARCHAR(255) NULL, chat_id BIGINT NOT NULL, message_id BIGINT NULL, kind VARCHAR(32) NOT NULL, body LONGTEXT NOT NULL, photo_file_id TEXT NULL, created_at BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'published', deleted TINYINT NOT NULL DEFAULT 0, confession_number BIGINT NULL)",
             "CREATE TABLE IF NOT EXISTS submissions (owner_id BIGINT NOT NULL, created_at BIGINT NOT NULL, INDEX submissions_owner_time (owner_id, created_at))",
             "DROP TABLE IF EXISTS reactions",
             "CREATE TABLE IF NOT EXISTS anonymous_comments (id BIGINT PRIMARY KEY AUTO_INCREMENT, confession_id BIGINT NOT NULL, commenter_id BIGINT NOT NULL, parent_id BIGINT NULL, body LONGTEXT NOT NULL, message_id BIGINT NULL, created_at BIGINT NOT NULL, deleted TINYINT NOT NULL DEFAULT 0, INDEX comments_user_time (commenter_id, created_at), INDEX comments_thread (confession_id, parent_id, deleted))",
@@ -109,8 +112,8 @@ class Store {
           ]
         : this.kind === "postgres"
           ? [
-            'CREATE TABLE IF NOT EXISTS "groups" (chat_id BIGINT PRIMARY KEY, title VARCHAR(255) NOT NULL, rules TEXT NOT NULL, linked_at BIGINT NOT NULL, topic_id BIGINT NULL, topic_name TEXT NULL)',
-            "CREATE TABLE IF NOT EXISTS confessions (id BIGSERIAL PRIMARY KEY, owner_id BIGINT NOT NULL, owner_username VARCHAR(255), owner_first_name VARCHAR(255), owner_last_name VARCHAR(255), chat_id BIGINT NOT NULL, message_id BIGINT, kind VARCHAR(32) NOT NULL, body TEXT NOT NULL, created_at BIGINT NOT NULL, deleted SMALLINT NOT NULL DEFAULT 0)",
+            'CREATE TABLE IF NOT EXISTS "groups" (chat_id BIGINT PRIMARY KEY, title VARCHAR(255) NOT NULL, rules TEXT NOT NULL, linked_at BIGINT NOT NULL, topic_id BIGINT NULL, topic_name TEXT NULL, next_confession_number BIGINT NOT NULL DEFAULT 1)',
+            "CREATE TABLE IF NOT EXISTS confessions (id BIGSERIAL PRIMARY KEY, owner_id BIGINT NOT NULL, owner_username VARCHAR(255), owner_first_name VARCHAR(255), owner_last_name VARCHAR(255), chat_id BIGINT NOT NULL, message_id BIGINT, kind VARCHAR(32) NOT NULL, body TEXT NOT NULL, photo_file_id TEXT NULL, created_at BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'published', deleted SMALLINT NOT NULL DEFAULT 0, confession_number BIGINT NULL)",
             "CREATE TABLE IF NOT EXISTS submissions (owner_id BIGINT NOT NULL, created_at BIGINT NOT NULL)",
             "CREATE INDEX IF NOT EXISTS submissions_owner_time ON submissions(owner_id, created_at)",
             "CREATE TABLE IF NOT EXISTS anonymous_comments (id BIGSERIAL PRIMARY KEY, confession_id BIGINT NOT NULL, commenter_id BIGINT NOT NULL, parent_id BIGINT, body TEXT NOT NULL, message_id BIGINT, created_at BIGINT NOT NULL, deleted SMALLINT NOT NULL DEFAULT 0)",
@@ -121,8 +124,8 @@ class Store {
             "CREATE TABLE IF NOT EXISTS bot_sessions (session_key VARCHAR(255) PRIMARY KEY, data TEXT NOT NULL, updated_at BIGINT NOT NULL)",
           ]
           : [
-            "CREATE TABLE IF NOT EXISTS `groups` (chat_id INTEGER PRIMARY KEY, title TEXT NOT NULL, rules TEXT NOT NULL, linked_at INTEGER NOT NULL, topic_id BIGINT NULL, topic_name TEXT NULL)",
-            "CREATE TABLE IF NOT EXISTS confessions (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER NOT NULL, owner_username TEXT, owner_first_name TEXT, owner_last_name TEXT, chat_id INTEGER NOT NULL, message_id INTEGER, kind TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE IF NOT EXISTS `groups` (chat_id INTEGER PRIMARY KEY, title TEXT NOT NULL, rules TEXT NOT NULL, linked_at INTEGER NOT NULL, topic_id BIGINT NULL, topic_name TEXT NULL, next_confession_number INTEGER NOT NULL DEFAULT 1)",
+            "CREATE TABLE IF NOT EXISTS confessions (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER NOT NULL, owner_username TEXT, owner_first_name TEXT, owner_last_name TEXT, chat_id INTEGER NOT NULL, message_id INTEGER, kind TEXT NOT NULL, body TEXT NOT NULL, photo_file_id TEXT NULL, created_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'published', deleted INTEGER NOT NULL DEFAULT 0, confession_number INTEGER NULL)",
             "CREATE TABLE IF NOT EXISTS submissions (owner_id INTEGER NOT NULL, created_at INTEGER NOT NULL)",
             "CREATE INDEX IF NOT EXISTS submissions_owner_time ON submissions(owner_id, created_at)",
             "DROP TABLE IF EXISTS reactions",
@@ -174,6 +177,19 @@ class Store {
         "ALTER TABLE confessions ADD COLUMN photo_file_id TEXT NULL",
       );
     }
+    if (!hasConfessionColumn("confession_number")) {
+      await this.run(
+        "ALTER TABLE confessions ADD COLUMN confession_number BIGINT NULL",
+      );
+    }
+    await this.run(
+      "UPDATE confessions SET confession_number = id WHERE confession_number IS NULL",
+    );
+    if (!hasGroupColumn("next_confession_number")) {
+      await this.run(
+        "ALTER TABLE `groups` ADD COLUMN next_confession_number BIGINT NOT NULL DEFAULT 1",
+      );
+    }
     if (this.kind === "sqlite") {
       const columns = await this.all("PRAGMA table_info(`groups`)");
       if (!columns.some((column) => column.name === "linked_at")) {
@@ -200,6 +216,23 @@ class Store {
     for (const [name, type] of [["topic_id", "BIGINT NULL"], ["topic_name", "TEXT NULL"]]) {
       if (!hasGroupColumn(name)) await this.run(`ALTER TABLE \`groups\` ADD COLUMN ${name} ${type}`);
     }
+    // Initialize next_confession_number for existing linked groups so numbering
+    // continues from the highest existing confession number.
+    const existingGroups = await this.all(
+      "SELECT chat_id FROM `groups` WHERE linked_at > 0",
+    );
+    for (const g of existingGroups) {
+      const maxRow = await this.get(
+        "SELECT COALESCE(MAX(confession_number), 0) AS m FROM confessions WHERE chat_id = ?",
+        [g.chat_id],
+      );
+      const nextNumber = Number(maxRow?.m || 0) + 1;
+      await this.run(
+        "UPDATE `groups` SET next_confession_number = ? WHERE chat_id = ?",
+        [nextNumber, g.chat_id],
+      );
+    }
+
     const commentColumns =
       this.kind === "sqlite"
         ? await this.all("PRAGMA table_info(anonymous_comments)")
@@ -886,12 +919,12 @@ bot.command("setgroup", async (ctx) => {
   const linkedAt = nowSeconds();
   if (store.kind === "mysql") {
     await store.run(
-      "INSERT INTO `groups`(chat_id,title,rules,linked_at) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE title=VALUES(title), linked_at=VALUES(linked_at)",
+      "INSERT INTO `groups`(chat_id,title,rules,linked_at,next_confession_number) VALUES(?,?,?,?,1) ON DUPLICATE KEY UPDATE title=VALUES(title), linked_at=VALUES(linked_at)",
       [ctx.chat.id, ctx.chat.title || "Telegram group", defaultRules, linkedAt],
     );
   } else {
     await store.run(
-      "INSERT INTO `groups`(chat_id,title,rules,linked_at) VALUES(?,?,?,?) ON CONFLICT(chat_id) DO UPDATE SET title=excluded.title, linked_at=excluded.linked_at",
+      "INSERT INTO `groups`(chat_id,title,rules,linked_at,next_confession_number) VALUES(?,?,?,?,1) ON CONFLICT(chat_id) DO UPDATE SET title=excluded.title, linked_at=excluded.linked_at",
       [ctx.chat.id, ctx.chat.title || "Telegram group", defaultRules, linkedAt],
     );
   }
@@ -921,13 +954,13 @@ bot.action(/^topic:(create|general)$/, async (ctx) => {
 });
 
 bot.command("settopic", async (ctx) => {
-  if (!await authorizeTopicAdmin(ctx)) return;
+  if (!isBotOwner(ctx)) return ctx.reply("This command is restricted to the bot owner.");
   if (!await linkedGroupForChat(ctx.chat.id)) return ctx.reply("This group is not linked to the bot.");
   return promptForTopic(ctx);
 });
 
 bot.command("removetopic", async (ctx) => {
-  if (!await authorizeTopicAdmin(ctx)) return;
+  if (!isBotOwner(ctx)) return ctx.reply("This command is restricted to the bot owner.");
   if (!await linkedGroupForChat(ctx.chat.id)) return ctx.reply("This group is not linked to the bot.");
   await clearTopicSetup(ctx.chat.id);
   await store.run("UPDATE `groups` SET topic_id = NULL, topic_name = NULL WHERE chat_id = ?", [ctx.chat.id]);
@@ -1146,7 +1179,8 @@ async function buildCommentPage(ctx, confessionId, pageNumber = 0) {
   for (const root of pageComments)
     await appendCommentCard(root, 0, 0, rootNumberById.get(Number(root.id)));
   const label = post.kind === "confession" ? "Confession" : "Vent";
-  const heading = `<b>${label} #${confessionId}</b>\n\n${escapeHtml(post.body)}\n\n<b>Comments (${count}) · Page ${page + 1}/${pageCount}</b>`;
+  const confessionNumber = Number(post.confession_number || post.id);
+  const heading = `<b>${label} #${confessionNumber}</b>\n\n${escapeHtml(post.body)}\n\n<b>Comments (${count}) · Page ${page + 1}/${pageCount}</b>`;
   const body = roots.length ? heading : `${heading}\n\nNo comments yet.`;
   return { post, body, count, page, pageCount, cards };
 }
@@ -1618,8 +1652,18 @@ bot.action(/^confirmconfession:(\d+)$/, async (ctx) => {
   if (!changed) {
     return ctx.reply("That submission was already processed.");
   }
+  // Allocate a group-specific confession number (starts at 1 after each link).
+  const groupRow = await store.get(
+    "SELECT next_confession_number FROM `groups` WHERE chat_id = ? AND linked_at > 0",
+    [row.chat_id],
+  );
+  const confessionNumber = Number(groupRow?.next_confession_number || 1);
+  await store.run(
+    "UPDATE `groups` SET next_confession_number = ? WHERE chat_id = ?",
+    [confessionNumber + 1, row.chat_id],
+  );
   const label = row.kind === "confession" ? "Confession" : "Vent";
-  const content = `<b>${label} #${row.id}</b>\n\n${escapeHtml(row.body)}`;
+  const content = `<b>${label} #${confessionNumber}</b>\n\n${escapeHtml(row.body)}`;
   const topicOptions = group.topic_id == null ? {} : { message_thread_id: Number(group.topic_id) };
   try {
     let posted;
@@ -1638,11 +1682,11 @@ bot.action(/^confirmconfession:(\d+)$/, async (ctx) => {
       });
     }
     await store.run(
-      "UPDATE confessions SET message_id = ? WHERE id = ? AND status = 'published'",
-      [posted.message_id, id],
+      "UPDATE confessions SET confession_number = ?, message_id = ? WHERE id = ? AND status = 'published'",
+      [confessionNumber, posted.message_id, id],
     );
     return ctx.reply(
-      `Posted anonymously as #${id}. You can delete it here at any time.`,
+      `Posted anonymously as #${confessionNumber}. You can delete it here at any time.`,
       privateDeleteKeyboard(id),
     );
   } catch (error) {
@@ -1771,11 +1815,16 @@ async function submitComment(ctx, body) {
   });
   if (limitMessage) return ctx.reply(limitMessage);
   ctx.session.pendingCommentDraft = body;
+  const confessionPost = await store.get(
+    "SELECT confession_number FROM confessions WHERE id = ?",
+    [confessionId],
+  );
+  const confessionNumber = Number(confessionPost?.confession_number || confessionId);
   const replyContext = ctx.session.pendingCommentParentId
     ? ` This is a reply to comment #${ctx.session.pendingCommentParentId}.`
     : "";
   return ctx.reply(
-    `Preview your anonymous comment on #${confessionId}:${replyContext}\n\n${escapeHtml(body)}\n\nPost this comment? It will be visible in the bot to members who open the comments, and will not be posted in the group.`,
+    `Preview your anonymous comment on #${confessionNumber}:${replyContext}\n\n${escapeHtml(body)}\n\nPost this comment? It will be visible in the bot to members who open the comments, and will not be posted in the group.`,
     { parse_mode: "HTML", ...confirmCommentKeyboard() },
   );
 }
@@ -1797,7 +1846,7 @@ bot.action("commentconfirm", async (ctx) => {
     ? Number(ctx.session.pendingCommentParentId)
     : null;
   const post = await store.get(
-    "SELECT id, chat_id, message_id, owner_id FROM confessions WHERE id = ? AND deleted = 0",
+    "SELECT id, chat_id, message_id, owner_id, confession_number FROM confessions WHERE id = ? AND deleted = 0",
     [confessionId],
   );
   if (!post) {
@@ -1831,8 +1880,9 @@ bot.action("commentconfirm", async (ctx) => {
   );
   await refreshCommentsButton(ctx.telegram, post);
   clearPending(ctx);
+  const confessionNumber = Number(post.confession_number || post.id);
   return ctx.reply(
-    `Your comment on #${confessionId} was posted to the bot's comments.`,
+    `Your comment on #${confessionNumber} was posted to the bot's comments.`,
   );
 });
 
@@ -1957,7 +2007,7 @@ async function main() {
   await bot.telegram.setMyCommands(publicCommands);
   if (botOwnerId) {
     await bot.telegram.setMyCommands(
-      [...publicCommands, ...ownerCommands, { command: "who", description: "Look up a confession submitter" }],
+      [...publicCommands, ...ownerCommands, ...ownerTopicCommands, { command: "who", description: "Look up a confession submitter" }],
       { scope: { type: "chat", chat_id: Number(botOwnerId) } },
     );
   }

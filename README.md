@@ -46,7 +46,11 @@ On startup, the bot adds nullable `topic_id` and `topic_name` columns to an exis
 - Confessions use Telegram's native message reactions. Members react from their Telegram client after a group admin enables reactions in group settings. The bot does not draw custom reaction buttons or track member reaction totals.
 - Members can reply normally in the group (those replies show their Telegram accounts) or use anonymous comments in the bot's private thread.
 
+Confession numbering is per group and resets to #1 whenever a group is unlinked and linked again. The number shown on a confession post (e.g. **Confession #1**) is independent of the internal database ID and continues sequentially within each linked group.
+
 The deletion button is sent only in the submitter's private chat after a successful post. Existing group deletion buttons are rejected with a private-use instruction; ownership is checked against the database for every deletion request. Comment counts are shown on each confession's **View comments** button and update when a comment is posted or deleted.
+
+Topic management commands `/settopic` and `/removetopic` are restricted to the bot owner and are only visible in the bot owner's Telegram command menu. `/grouptopic` remains visible to group members.
 
 ## Privacy and abuse controls
 
