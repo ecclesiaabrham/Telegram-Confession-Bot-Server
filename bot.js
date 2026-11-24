@@ -163,6 +163,17 @@ class Store {
       if (!hasConfessionColumn(name))
         await this.run(`ALTER TABLE confessions ADD COLUMN ${name} ${type}`);
     }
+    if (!hasConfessionColumn("status")) {
+      await this.run(
+        "ALTER TABLE confessions ADD COLUMN status TEXT NOT NULL DEFAULT 'published'",
+      );
+    }
+    await this.run("UPDATE confessions SET status = 'published' WHERE status IS NULL");
+    if (!hasConfessionColumn("photo_file_id")) {
+      await this.run(
+        "ALTER TABLE confessions ADD COLUMN photo_file_id TEXT NULL",
+      );
+    }
     if (this.kind === "sqlite") {
       const columns = await this.all("PRAGMA table_info(`groups`)");
       if (!columns.some((column) => column.name === "linked_at")) {
@@ -247,6 +258,76 @@ class Store {
     return rows;
   }
 
+  async transaction(fn) {
+    if (this.kind === "sqlite") {
+      this.db.exec("BEGIN");
+      try {
+        const result = await fn(this);
+        this.db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {}
+        throw error;
+      }
+    }
+    if (this.kind === "mysql") {
+      const conn = await this.pool.getConnection();
+      const tx = {
+        run: async (sql, params = []) => {
+          const [result] = await conn.execute(sql, params);
+          return result;
+        },
+        all: async (sql, params = []) => {
+          const [rows] = await conn.execute(sql, params);
+          return rows;
+        },
+        get: async (sql, params = []) => {
+          const [rows] = await conn.execute(sql, params);
+          return rows[0];
+        },
+      };
+      try {
+        await conn.query("BEGIN");
+        const result = await fn(tx);
+        await conn.query("COMMIT");
+        return result;
+      } catch (error) {
+        await conn.query("ROLLBACK").catch(() => {});
+        throw error;
+      } finally {
+        conn.release();
+      }
+    }
+    const client = await this.pgPool.connect();
+    const tx = {
+      run: async (sql, params = []) => {
+        const result = await client.query(toPostgresSql(sql), params);
+        return result;
+      },
+      all: async (sql, params = []) => {
+        const result = await client.query(toPostgresSql(sql), params);
+        return result.rows;
+      },
+      get: async (sql, params = []) => {
+        const result = await client.query(toPostgresSql(sql), params);
+        return result.rows[0];
+      },
+    };
+    try {
+      await client.query("BEGIN");
+      const result = await fn(tx);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async getSession(key) {
     const row = await this.get(
       "SELECT data FROM bot_sessions WHERE session_key = ?",
@@ -329,7 +410,10 @@ function commentsKeyboard(confessionId, count = 0) {
 
 function commentsHeaderKeyboard(confessionId) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("Add comment", `addcomment:${confessionId}`)],
+    [
+      Markup.button.callback("Read comments", `readcomments:${confessionId}`),
+      Markup.button.callback("Add comment", `addcomment:${confessionId}`),
+    ],
   ]);
 }
 
@@ -352,14 +436,17 @@ function commentsPageKeyboard(confessionId, page, pageCount) {
   return navigation.length ? Markup.inlineKeyboard([navigation]) : undefined;
 }
 
-function commentCardKeyboard(commentId, likes = 0, dislikes = 0) {
-  return Markup.inlineKeyboard([
-    [
-      Markup.button.callback("Reply", `commentreply:${commentId}`),
-      Markup.button.callback(`👍 ${likes}`, `commentlike:${commentId}`),
-      Markup.button.callback(`👎 ${dislikes}`, `commentdislike:${commentId}`),
-    ],
-  ]);
+function commentCardKeyboard(commentId, commenterId, viewerId, likes = 0, dislikes = 0) {
+  const isOwner = Number(commenterId) === Number(viewerId);
+  const rows = [[
+    Markup.button.callback("Reply", `commentreply:${commentId}`),
+    Markup.button.callback(`👍 ${likes}`, `commentlike:${commentId}`),
+    Markup.button.callback(`👎 ${dislikes}`, `commentdislike:${commentId}`),
+  ]];
+  if (isOwner) {
+    rows.push([Markup.button.callback("Delete my comment", `deletecomment:${commentId}`)]);
+  }
+  return Markup.inlineKeyboard(rows);
 }
 
 function confirmCommentKeyboard() {
@@ -367,6 +454,15 @@ function confirmCommentKeyboard() {
     [
       Markup.button.callback("Post comment", "commentconfirm"),
       Markup.button.callback("Cancel", "commentcancel"),
+    ],
+  ]);
+}
+
+function confirmSubmissionKeyboard(confessionId) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("Confirm", `confirmconfession:${confessionId}`),
+      Markup.button.callback("Cancel", `cancelconfession:${confessionId}`),
     ],
   ]);
 }
@@ -861,9 +957,27 @@ bot.command("unlinkgroup", async (ctx) => {
   if (String(linkedGroup.chat_id) !== String(ctx.chat.id))
     return ctx.reply("This group is not currently linked to the bot.");
 
-  await store.run("UPDATE `groups` SET linked_at = 0 WHERE linked_at > 0");
+  const chatId = ctx.chat.id;
+  try {
+    await store.transaction(async (tx) => {
+      // Delete dependent records in dependency order so no orphaned rows remain.
+      await tx.run(
+        "DELETE FROM comment_reactions WHERE comment_id IN (SELECT id FROM anonymous_comments WHERE confession_id IN (SELECT id FROM confessions WHERE chat_id = ?))",
+        [chatId],
+      );
+      await tx.run(
+        "DELETE FROM anonymous_comments WHERE confession_id IN (SELECT id FROM confessions WHERE chat_id = ?)",
+        [chatId],
+      );
+      await tx.run("DELETE FROM confessions WHERE chat_id = ?", [chatId]);
+      await tx.run("DELETE FROM `groups` WHERE chat_id = ?", [chatId]);
+    });
+  } catch (error) {
+    console.error(`Could not unlink group ${chatId}:`, error);
+    return ctx.reply("I could not unlink this group. Please try again later.");
+  }
   return ctx.reply(
-    "This group has been unlinked. New confessions and vents will no longer be accepted for it. Existing confessions and comments are preserved. A group admin can link a group again with /setgroup.",
+    "This group has been unlinked. All confessions, comments, reactions, and group-specific settings were deleted. The group can be linked again with /setgroup, which starts with a clean state.",
   );
 });
 
@@ -1010,6 +1124,8 @@ async function buildCommentPage(ctx, confessionId, pageNumber = 0) {
         : `<b>Comment ${numberLabel}</b>\n\n${escapeHtml(comment.body)}\n\n<b>${userLabel}</b>`,
       keyboard: commentCardKeyboard(
         number,
+        comment.commenter_id,
+        ctx.from.id,
         reactionCounts.like || 0,
         reactionCounts.dislike || 0,
       ),
@@ -1153,7 +1269,7 @@ async function toggleCommentReaction(ctx, commentId, reaction) {
   // than Telegram's callback query response window.
   await acknowledgeCallback(ctx);
   const comment = await store.get(
-    "SELECT c.id, c.confession_id, f.chat_id FROM anonymous_comments c JOIN confessions f ON f.id = c.confession_id WHERE c.id = ? AND c.deleted = 0 AND f.deleted = 0",
+    "SELECT c.id, c.confession_id, c.commenter_id, f.chat_id FROM anonymous_comments c JOIN confessions f ON f.id = c.confession_id WHERE c.id = ? AND c.deleted = 0 AND f.deleted = 0",
     [commentId],
   );
   if (!comment) return ctx.reply("That comment is no longer available.");
@@ -1189,8 +1305,13 @@ async function toggleCommentReaction(ctx, commentId, reaction) {
   );
   try {
     return await ctx.editMessageReplyMarkup(
-      commentCardKeyboard(commentId, values.like || 0, values.dislike || 0)
-        .reply_markup,
+      commentCardKeyboard(
+        commentId,
+        comment.commenter_id,
+        ctx.from.id,
+        values.like || 0,
+        values.dislike || 0,
+      ).reply_markup,
     );
   } catch (error) {
     if (isMessageNotModifiedError(error)) return;
@@ -1459,6 +1580,108 @@ bot.action(/^delete:(\d+)$/, async (ctx) => {
   return requestDelete(ctx, id);
 });
 
+bot.action(/^confirmconfession:(\d+)$/, async (ctx) => {
+  if (!isPrivate(ctx)) {
+    return ctx.answerCbQuery(
+      "Use this confirmation in your private chat with the bot.",
+      { show_alert: true },
+    );
+  }
+  await acknowledgeCallback(ctx);
+  const id = Number(ctx.match[1]);
+  const row = await store.get(
+    "SELECT id, chat_id, kind, body, photo_file_id, owner_id, status FROM confessions WHERE id = ? AND owner_id = ? AND status = 'pending'",
+    [id, ctx.from.id],
+  );
+  if (!row) {
+    return ctx.reply(
+      "That submission is no longer pending, does not belong to you, or was already processed.",
+    );
+  }
+  const group = await store.get(
+    "SELECT chat_id, topic_id FROM `groups` WHERE chat_id = ? AND linked_at > 0",
+    [row.chat_id],
+  );
+  if (!group) {
+    await store.run(
+      "UPDATE confessions SET status = 'cancelled' WHERE id = ? AND status = 'pending'",
+      [id],
+    );
+    return ctx.reply("The group is no longer linked. Your submission was cancelled.");
+  }
+  // Atomically claim the submission so only one Confirm can publish it.
+  const claimed = await store.run(
+    "UPDATE confessions SET status = 'published' WHERE id = ? AND status = 'pending'",
+    [id],
+  );
+  const changed = claimed.changes ?? claimed.affectedRows ?? claimed.rowCount;
+  if (!changed) {
+    return ctx.reply("That submission was already processed.");
+  }
+  const label = row.kind === "confession" ? "Confession" : "Vent";
+  const content = `<b>${label} #${row.id}</b>\n\n${escapeHtml(row.body)}`;
+  const topicOptions = group.topic_id == null ? {} : { message_thread_id: Number(group.topic_id) };
+  try {
+    let posted;
+    if (row.photo_file_id) {
+      posted = await ctx.telegram.sendPhoto(row.chat_id, row.photo_file_id, {
+        caption: content,
+        parse_mode: "HTML",
+        ...topicOptions,
+        ...commentsKeyboard(row.id, 0),
+      });
+    } else {
+      posted = await ctx.telegram.sendMessage(row.chat_id, content, {
+        parse_mode: "HTML",
+        ...topicOptions,
+        ...commentsKeyboard(row.id, 0),
+      });
+    }
+    await store.run(
+      "UPDATE confessions SET message_id = ? WHERE id = ? AND status = 'published'",
+      [posted.message_id, id],
+    );
+    return ctx.reply(
+      `Posted anonymously as #${id}. You can delete it here at any time.`,
+      privateDeleteKeyboard(id),
+    );
+  } catch (error) {
+    console.error(`Could not post submission ${id}:`, error);
+    await store.run(
+      "UPDATE confessions SET status = 'cancelled' WHERE id = ? AND status = 'published'",
+      [id],
+    );
+    return ctx.reply(
+      "I could not post that right now. Your submission was cancelled.",
+    );
+  }
+});
+
+bot.action(/^cancelconfession:(\d+)$/, async (ctx) => {
+  if (!isPrivate(ctx)) {
+    return ctx.answerCbQuery(
+      "Use this confirmation in your private chat.",
+      { show_alert: true },
+    );
+  }
+  await acknowledgeCallback(ctx);
+  const id = Number(ctx.match[1]);
+  const row = await store.get(
+    "SELECT id, owner_id, status FROM confessions WHERE id = ? AND owner_id = ? AND status = 'pending'",
+    [id, ctx.from.id],
+  );
+  if (!row) {
+    return ctx.reply(
+      "That submission is no longer pending or does not belong to you.",
+    );
+  }
+  await store.run(
+    "UPDATE confessions SET status = 'cancelled' WHERE id = ? AND status = 'pending'",
+    [id],
+  );
+  return ctx.reply("Submission cancelled; it was not published.");
+});
+
 async function submit(ctx, body, photoFileId = null) {
   if (!isPrivate(ctx) || !ctx.session?.pendingKind) return;
   body = (body || "").trim();
@@ -1492,7 +1715,7 @@ async function submit(ctx, body, photoFileId = null) {
     return explainMembershipFailure(ctx, membership.unavailable);
   }
   const result = await store.run(
-    `INSERT INTO confessions(owner_id,owner_username,owner_first_name,owner_last_name,chat_id,kind,body,created_at) VALUES(?,?,?,?,?,?,?,?)${store.kind === "postgres" ? " RETURNING id" : ""}`,
+    `INSERT INTO confessions(owner_id,owner_username,owner_first_name,owner_last_name,chat_id,kind,body,photo_file_id,created_at,status) VALUES(?,?,?,?,?,?,?,?,?,'pending')${store.kind === "postgres" ? " RETURNING id" : ""}`,
     [
       userId,
       ctx.from.username || null,
@@ -1501,6 +1724,7 @@ async function submit(ctx, body, photoFileId = null) {
       targetChat,
       kind,
       body,
+      photoFileId || null,
       now,
     ],
   );
@@ -1509,38 +1733,13 @@ async function submit(ctx, body, photoFileId = null) {
     userId,
     now,
   ]);
+  delete ctx.session.pendingKind;
+  delete ctx.session.targetChat;
   const label = kind === "confession" ? "Confession" : "Vent";
-  const content = `<b>${label} #${id}</b>\n\n${escapeHtml(body)}`;
-  const topicOptions = linkedGroup.topic_id == null ? {} : { message_thread_id: Number(linkedGroup.topic_id) };
-
-  try {
-    const posted = photoFileId
-      ? await ctx.telegram.sendPhoto(targetChat, photoFileId, {
-          caption: content,
-          parse_mode: "HTML",
-          ...topicOptions,
-          ...commentsKeyboard(id, 0),
-        })
-      : await ctx.telegram.sendMessage(targetChat, content, {
-          parse_mode: "HTML",
-          ...topicOptions,
-          ...commentsKeyboard(id, 0),
-        });
-    await store.run("UPDATE confessions SET message_id = ? WHERE id = ?", [
-      posted.message_id,
-      id,
-    ]);
-  } catch (error) {
-    console.error(`Could not post submission ${id}:`, error);
-    await store.run("UPDATE confessions SET deleted = 1 WHERE id = ?", [id]);
-    return ctx.reply(
-      "I could not post that right now. Please try again later or ask a group admin to check the bot’s permissions.",
-    );
-  }
-  clearPending(ctx);
+  const photoNote = photoFileId ? " Your photo will be published with it." : "";
   return ctx.reply(
-    `Posted anonymously as #${id}. You can delete it here at any time.`,
-    privateDeleteKeyboard(id),
+    `Review your anonymous ${kind} before it is published:${photoNote}\n\n${escapeHtml(body)}\n\nConfirm to publish it anonymously to the group, or cancel to discard it.`,
+    { parse_mode: "HTML", ...confirmSubmissionKeyboard(id) },
   );
 }
 
@@ -1647,6 +1846,46 @@ bot.action("commentcancel", async (ctx) => {
   delete ctx.session.pendingCommentId;
   delete ctx.session.pendingCommentParentId;
   return ctx.reply("Comment cancelled; it was not posted.");
+});
+
+bot.action(/^readcomments:(\d+)$/, async (ctx) => {
+  if (!isPrivate(ctx)) {
+    return ctx.answerCbQuery("Open comments in your private chat with the bot.", {
+      show_alert: true,
+    });
+  }
+  await ctx.answerCbQuery();
+  return sendCommentList(ctx, Number(ctx.match[1]), 0);
+});
+
+bot.action(/^deletecomment:(\d+)$/, async (ctx) => {
+  if (!isPrivate(ctx)) {
+    return ctx.answerCbQuery("Delete comments in your private chat with the bot.", {
+      show_alert: true,
+    });
+  }
+  await acknowledgeCallback(ctx);
+  const commentId = Number(ctx.match[1]);
+  const comment = await store.get(
+    "SELECT id, confession_id, commenter_id, deleted FROM anonymous_comments WHERE id = ?",
+    [commentId],
+  );
+  if (!comment || comment.deleted) {
+    return ctx.reply("That comment is no longer available.");
+  }
+  if (Number(comment.commenter_id) !== Number(ctx.from.id)) {
+    return ctx.reply("You can only delete your own comments.");
+  }
+  await store.run("DELETE FROM comment_reactions WHERE comment_id = ?", [commentId]);
+  await store.run("UPDATE anonymous_comments SET deleted = 1 WHERE id = ?", [commentId]);
+  const post = await store.get(
+    "SELECT id, chat_id, message_id FROM confessions WHERE id = ?",
+    [comment.confession_id],
+  );
+  if (post?.message_id) {
+    await refreshCommentsButton(ctx.telegram, post);
+  }
+  return sendCommentList(ctx, Number(comment.confession_id), 0);
 });
 
 bot.on("text", async (ctx, next) => {
