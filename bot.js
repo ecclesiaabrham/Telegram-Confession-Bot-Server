@@ -185,6 +185,14 @@ class Store {
     await this.run(
       "UPDATE confessions SET confession_number = id WHERE confession_number IS NULL",
     );
+    const groupColumns = this.kind === "sqlite"
+      ? await this.all("PRAGMA table_info(`groups`)")
+      : this.kind === "mysql"
+        ? await this.all("SHOW COLUMNS FROM `groups`")
+        : await this.all("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'groups'");
+    const hasGroupColumn = (name) => groupColumns.some((column) =>
+      this.kind === "mysql" ? column.Field === name : column.name === name,
+    );
     if (!hasGroupColumn("next_confession_number")) {
       await this.run(
         "ALTER TABLE `groups` ADD COLUMN next_confession_number BIGINT NOT NULL DEFAULT 1",
@@ -205,14 +213,6 @@ class Store {
         );
       }
     }
-    const groupColumns = this.kind === "sqlite"
-      ? await this.all("PRAGMA table_info(`groups`)")
-      : this.kind === "mysql"
-        ? await this.all("SHOW COLUMNS FROM `groups`")
-        : await this.all("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'groups'");
-    const hasGroupColumn = (name) => groupColumns.some((column) =>
-      this.kind === "mysql" ? column.Field === name : column.name === name,
-    );
     for (const [name, type] of [["topic_id", "BIGINT NULL"], ["topic_name", "TEXT NULL"]]) {
       if (!hasGroupColumn(name)) await this.run(`ALTER TABLE \`groups\` ADD COLUMN ${name} ${type}`);
     }
