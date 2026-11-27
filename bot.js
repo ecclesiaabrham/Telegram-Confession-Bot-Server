@@ -46,6 +46,7 @@ const publicCommands = [
   { command: "help", description: "Show available commands" },
   { command: "confess", description: "Submit an anonymous confession" },
   { command: "vent", description: "Submit an anonymous vent" },
+  { command: "allmyconfessions", description: "View your submitted confessions" },
   { command: "cancel", description: "Cancel a pending submission" },
   { command: "myid", description: "Show your Telegram user ID" },
   { command: "name", description: "Set your display name" },
@@ -102,10 +103,10 @@ class Store {
       this.kind === "mysql"
         ? [
             "CREATE TABLE IF NOT EXISTS `groups` (chat_id BIGINT PRIMARY KEY, title VARCHAR(255) NOT NULL, rules TEXT NOT NULL, linked_at BIGINT NOT NULL, topic_id BIGINT NULL, topic_name TEXT NULL, next_confession_number BIGINT NOT NULL DEFAULT 1)",
-            "CREATE TABLE IF NOT EXISTS confessions (id BIGINT PRIMARY KEY AUTO_INCREMENT, owner_id BIGINT NOT NULL, owner_username VARCHAR(255) NULL, owner_first_name VARCHAR(255) NULL, owner_last_name VARCHAR(255) NULL, chat_id BIGINT NOT NULL, message_id BIGINT NULL, kind VARCHAR(32) NOT NULL, body LONGTEXT NOT NULL, photo_file_id TEXT NULL, created_at BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'published', deleted TINYINT NOT NULL DEFAULT 0, confession_number BIGINT NULL)",
+            "CREATE TABLE IF NOT EXISTS confessions (id BIGINT PRIMARY KEY AUTO_INCREMENT, owner_id BIGINT NOT NULL, owner_username VARCHAR(255) NULL, owner_first_name VARCHAR(255) NULL, owner_last_name VARCHAR(255) NULL, chat_id BIGINT NOT NULL, message_id BIGINT NULL, kind VARCHAR(32) NOT NULL, body LONGTEXT NOT NULL, photo_file_id TEXT NULL, media_type VARCHAR(32) NULL, media_file_id TEXT NULL, extra_message_id BIGINT NULL, created_at BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'published', deleted TINYINT NOT NULL DEFAULT 0, confession_number BIGINT NULL)",
             "CREATE TABLE IF NOT EXISTS submissions (owner_id BIGINT NOT NULL, created_at BIGINT NOT NULL, INDEX submissions_owner_time (owner_id, created_at))",
             "DROP TABLE IF EXISTS reactions",
-            "CREATE TABLE IF NOT EXISTS anonymous_comments (id BIGINT PRIMARY KEY AUTO_INCREMENT, confession_id BIGINT NOT NULL, commenter_id BIGINT NOT NULL, parent_id BIGINT NULL, body LONGTEXT NOT NULL, message_id BIGINT NULL, created_at BIGINT NOT NULL, deleted TINYINT NOT NULL DEFAULT 0, INDEX comments_user_time (commenter_id, created_at), INDEX comments_thread (confession_id, parent_id, deleted))",
+            "CREATE TABLE IF NOT EXISTS anonymous_comments (id BIGINT PRIMARY KEY AUTO_INCREMENT, confession_id BIGINT NOT NULL, commenter_id BIGINT NOT NULL, parent_id BIGINT NULL, body LONGTEXT NOT NULL, media_type VARCHAR(32) NULL, media_file_id TEXT NULL, message_id BIGINT NULL, created_at BIGINT NOT NULL, deleted TINYINT NOT NULL DEFAULT 0, INDEX comments_user_time (commenter_id, created_at), INDEX comments_thread (confession_id, parent_id, deleted))",
             "CREATE TABLE IF NOT EXISTS comment_reactions (comment_id BIGINT NOT NULL, user_id BIGINT NOT NULL, reaction VARCHAR(8) NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY (comment_id, user_id))",
             "CREATE TABLE IF NOT EXISTS user_profiles (user_id BIGINT PRIMARY KEY, display_name VARCHAR(64) NOT NULL, name_key VARCHAR(64) NOT NULL UNIQUE)",
             "CREATE TABLE IF NOT EXISTS bot_sessions (session_key VARCHAR(255) PRIMARY KEY, data LONGTEXT NOT NULL, updated_at BIGINT NOT NULL)",
@@ -113,10 +114,10 @@ class Store {
         : this.kind === "postgres"
           ? [
             'CREATE TABLE IF NOT EXISTS "groups" (chat_id BIGINT PRIMARY KEY, title VARCHAR(255) NOT NULL, rules TEXT NOT NULL, linked_at BIGINT NOT NULL, topic_id BIGINT NULL, topic_name TEXT NULL, next_confession_number BIGINT NOT NULL DEFAULT 1)',
-            "CREATE TABLE IF NOT EXISTS confessions (id BIGSERIAL PRIMARY KEY, owner_id BIGINT NOT NULL, owner_username VARCHAR(255), owner_first_name VARCHAR(255), owner_last_name VARCHAR(255), chat_id BIGINT NOT NULL, message_id BIGINT, kind VARCHAR(32) NOT NULL, body TEXT NOT NULL, photo_file_id TEXT NULL, created_at BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'published', deleted SMALLINT NOT NULL DEFAULT 0, confession_number BIGINT NULL)",
+            "CREATE TABLE IF NOT EXISTS confessions (id BIGSERIAL PRIMARY KEY, owner_id BIGINT NOT NULL, owner_username VARCHAR(255), owner_first_name VARCHAR(255), owner_last_name VARCHAR(255), chat_id BIGINT NOT NULL, message_id BIGINT, kind VARCHAR(32) NOT NULL, body TEXT NOT NULL, photo_file_id TEXT NULL, media_type VARCHAR(32) NULL, media_file_id TEXT NULL, extra_message_id BIGINT NULL, created_at BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'published', deleted SMALLINT NOT NULL DEFAULT 0, confession_number BIGINT NULL)",
             "CREATE TABLE IF NOT EXISTS submissions (owner_id BIGINT NOT NULL, created_at BIGINT NOT NULL)",
             "CREATE INDEX IF NOT EXISTS submissions_owner_time ON submissions(owner_id, created_at)",
-            "CREATE TABLE IF NOT EXISTS anonymous_comments (id BIGSERIAL PRIMARY KEY, confession_id BIGINT NOT NULL, commenter_id BIGINT NOT NULL, parent_id BIGINT, body TEXT NOT NULL, message_id BIGINT, created_at BIGINT NOT NULL, deleted SMALLINT NOT NULL DEFAULT 0)",
+            "CREATE TABLE IF NOT EXISTS anonymous_comments (id BIGSERIAL PRIMARY KEY, confession_id BIGINT NOT NULL, commenter_id BIGINT NOT NULL, parent_id BIGINT, body TEXT NOT NULL, media_type VARCHAR(32) NULL, media_file_id TEXT NULL, message_id BIGINT, created_at BIGINT NOT NULL, deleted SMALLINT NOT NULL DEFAULT 0)",
             "CREATE INDEX IF NOT EXISTS comments_user_time ON anonymous_comments(commenter_id, created_at)",
             "CREATE INDEX IF NOT EXISTS comments_thread ON anonymous_comments(confession_id, parent_id, deleted)",
             "CREATE TABLE IF NOT EXISTS comment_reactions (comment_id BIGINT NOT NULL, user_id BIGINT NOT NULL, reaction VARCHAR(8) NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY(comment_id, user_id))",
@@ -125,11 +126,11 @@ class Store {
           ]
           : [
             "CREATE TABLE IF NOT EXISTS `groups` (chat_id INTEGER PRIMARY KEY, title TEXT NOT NULL, rules TEXT NOT NULL, linked_at INTEGER NOT NULL, topic_id BIGINT NULL, topic_name TEXT NULL, next_confession_number INTEGER NOT NULL DEFAULT 1)",
-            "CREATE TABLE IF NOT EXISTS confessions (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER NOT NULL, owner_username TEXT, owner_first_name TEXT, owner_last_name TEXT, chat_id INTEGER NOT NULL, message_id INTEGER, kind TEXT NOT NULL, body TEXT NOT NULL, photo_file_id TEXT NULL, created_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'published', deleted INTEGER NOT NULL DEFAULT 0, confession_number INTEGER NULL)",
+            "CREATE TABLE IF NOT EXISTS confessions (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER NOT NULL, owner_username TEXT, owner_first_name TEXT, owner_last_name TEXT, chat_id INTEGER NOT NULL, message_id INTEGER, kind TEXT NOT NULL, body TEXT NOT NULL, photo_file_id TEXT NULL, media_type TEXT NULL, media_file_id TEXT NULL, extra_message_id INTEGER NULL, created_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'published', deleted INTEGER NOT NULL DEFAULT 0, confession_number INTEGER NULL)",
             "CREATE TABLE IF NOT EXISTS submissions (owner_id INTEGER NOT NULL, created_at INTEGER NOT NULL)",
             "CREATE INDEX IF NOT EXISTS submissions_owner_time ON submissions(owner_id, created_at)",
             "DROP TABLE IF EXISTS reactions",
-            "CREATE TABLE IF NOT EXISTS anonymous_comments (id INTEGER PRIMARY KEY AUTOINCREMENT, confession_id INTEGER NOT NULL, commenter_id INTEGER NOT NULL, parent_id INTEGER, body TEXT NOT NULL, message_id INTEGER, created_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE IF NOT EXISTS anonymous_comments (id INTEGER PRIMARY KEY AUTOINCREMENT, confession_id INTEGER NOT NULL, commenter_id INTEGER NOT NULL, parent_id INTEGER, body TEXT NOT NULL, media_type TEXT NULL, media_file_id TEXT NULL, message_id INTEGER, created_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0)",
             "CREATE INDEX IF NOT EXISTS comments_user_time ON anonymous_comments(commenter_id, created_at)",
             "CREATE TABLE IF NOT EXISTS comment_reactions (comment_id INTEGER NOT NULL, user_id INTEGER NOT NULL, reaction TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(comment_id, user_id))",
             "CREATE TABLE IF NOT EXISTS user_profiles (user_id INTEGER PRIMARY KEY, display_name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE)",
@@ -177,6 +178,25 @@ class Store {
         "ALTER TABLE confessions ADD COLUMN photo_file_id TEXT NULL",
       );
     }
+    if (!hasConfessionColumn("media_type")) {
+      await this.run("ALTER TABLE confessions ADD COLUMN media_type TEXT NULL");
+    }
+    if (!hasConfessionColumn("media_file_id")) {
+      await this.run("ALTER TABLE confessions ADD COLUMN media_file_id TEXT NULL");
+    }
+    if (!hasConfessionColumn("extra_message_id")) {
+      await this.run(
+        this.kind === "sqlite"
+          ? "ALTER TABLE confessions ADD COLUMN extra_message_id INTEGER NULL"
+          : "ALTER TABLE confessions ADD COLUMN extra_message_id BIGINT NULL",
+      );
+    }
+    await this.run(
+      "UPDATE confessions SET media_type = 'photo', media_file_id = photo_file_id WHERE photo_file_id IS NOT NULL AND media_file_id IS NULL",
+    );
+    await this.run(
+      "UPDATE confessions SET media_type = 'text' WHERE media_type IS NULL",
+    );
     if (!hasConfessionColumn("confession_number")) {
       await this.run(
         "ALTER TABLE confessions ADD COLUMN confession_number BIGINT NULL",
@@ -241,19 +261,30 @@ class Store {
           : await this.all(
               "SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'anonymous_comments'",
             );
-    const hasParentId =
-      this.kind === "sqlite"
-        ? commentColumns.some((column) => column.name === "parent_id")
-        : this.kind === "mysql"
-          ? commentColumns.some((column) => column.Field === "parent_id")
-          : commentColumns.some((column) => column.name === "parent_id");
-    if (!hasParentId) {
+    const hasCommentColumn = (name) =>
+      commentColumns.some((column) =>
+        this.kind === "mysql" ? column.Field === name : column.name === name,
+      );
+    if (!hasCommentColumn("parent_id")) {
       await this.run(
         this.kind === "sqlite"
           ? "ALTER TABLE anonymous_comments ADD COLUMN parent_id INTEGER"
           : "ALTER TABLE anonymous_comments ADD COLUMN parent_id BIGINT NULL",
       );
     }
+    if (!hasCommentColumn("media_type")) {
+      await this.run(
+        "ALTER TABLE anonymous_comments ADD COLUMN media_type TEXT NULL",
+      );
+    }
+    if (!hasCommentColumn("media_file_id")) {
+      await this.run(
+        "ALTER TABLE anonymous_comments ADD COLUMN media_file_id TEXT NULL",
+      );
+    }
+    await this.run(
+      "UPDATE anonymous_comments SET media_type = 'text' WHERE media_type IS NULL",
+    );
     if (this.kind === "sqlite" || this.kind === "postgres") {
       await this.run(
         "CREATE INDEX IF NOT EXISTS comments_thread ON anonymous_comments(confession_id, parent_id, deleted)",
@@ -435,17 +466,30 @@ function commentsKeyboard(confessionId, count = 0) {
     [
       Markup.button.url(
         `Read or add comment (${count})`,
-        `https://t.me/${username}?start=comments_${confessionId}_0`,
+        `https://t.me/${username}?start=confession_${confessionId}`,
       ),
     ],
   ]);
 }
 
+function confessionViewKeyboard(confessionId, count = 0, isOwner = false) {
+  const rows = [
+    [
+      Markup.button.callback(`Read Comments (${count})`, `readcomments:${confessionId}:0`),
+      Markup.button.callback("Add comment", `addcomment:${confessionId}`),
+    ],
+  ];
+  if (isOwner) {
+    rows.push([Markup.button.callback("Delete my submission", `delete:${confessionId}`)]);
+  }
+  return Markup.inlineKeyboard(rows);
+}
+
 function commentsHeaderKeyboard(confessionId) {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("Read comments", `readcomments:${confessionId}`),
       Markup.button.callback("Add comment", `addcomment:${confessionId}`),
+      Markup.button.callback("⬅️ Back to Confession", `backtoconfession:${confessionId}`),
     ],
   ]);
 }
@@ -466,7 +510,12 @@ function commentsPageKeyboard(confessionId, page, pageCount) {
         `commentspage:${confessionId}:${page + 1}`,
       ),
     );
-  return navigation.length ? Markup.inlineKeyboard([navigation]) : undefined;
+  const rows = [];
+  if (navigation.length) rows.push(navigation);
+  rows.push([
+    Markup.button.callback("⬅️ Back to Confession", `backtoconfession:${confessionId}`),
+  ]);
+  return Markup.inlineKeyboard(rows);
 }
 
 function commentCardKeyboard(commentId, commenterId, viewerId, likes = 0, dislikes = 0) {
@@ -778,6 +827,8 @@ function clearPending(ctx) {
   delete ctx.session.pendingCommentId;
   delete ctx.session.pendingCommentParentId;
   delete ctx.session.pendingCommentDraft;
+  delete ctx.session.directDraft;
+  delete ctx.session.fromMyConfessionsPage;
 }
 
 async function checkRateLimit(
@@ -808,18 +859,19 @@ async function checkRateLimit(
 bot.start(async (ctx) => {
   if (isPrivate(ctx)) {
     const payload = ctx.startPayload || "";
+    const confessionMatch = /^confession_(\d+)$/.exec(payload);
+    if (confessionMatch) return sendConfessionView(ctx, Number(confessionMatch[1]));
     const commentsMatch = /^comments_(\d+)(?:_(\d+))?$/.exec(payload);
     if (commentsMatch)
-      return sendCommentList(
+      return sendConfessionView(
         ctx,
         Number(commentsMatch[1]),
-        Number(commentsMatch[2] || 0),
       );
     const addCommentMatch = /^addcomment_(\d+)$/.exec(payload);
     if (addCommentMatch)
       return promptForComment(ctx, Number(addCommentMatch[1]));
     return ctx.reply(
-      "Send /confess or /vent, then send your message here. I will post it anonymously in your section group. Use /delete <ID> to request removal of your post.\n\nGroup members won’t see your account. Your anonymity is protected. Your identity will remain confidential. Use /help for commands and /rules to read the group rules.",
+      "Send /confess or /vent, then send your message here (or send text, photo, video, GIF, or sticker directly). I will post it anonymously in your section group. Use /allMyConfessions to view all your submissions. Use /delete <ID> to request removal of your post.\n\nGroup members won’t see your account. Your anonymity is protected. Your identity will remain confidential. Use /help for commands and /rules to read the group rules.",
     );
   }
   return ctx.reply(
@@ -829,10 +881,10 @@ bot.start(async (ctx) => {
 
 bot.help((ctx) =>
   ctx.reply(
-    "/start — get started\n/confess — submit a confession privately\n/vent — submit a vent privately\n/myid — show your Telegram user ID\n" +
+    "/start — get started\n/confess — submit a confession privately\n/vent — submit a vent privately\n/allMyConfessions — view all your submitted confessions\n/myid — show your Telegram user ID\n" +
       "/delete <ID> — request deletion of your submission\n/rules — show group rules\n" +
       "/comments <ID> views comments; /comment <ID> adds one anonymously; /name <name> sets your unique display name.\n" +
-      "Use Telegram's built-in reactions on group posts. Use Read or add comment to open the private thread; the group shows only the comment count. Group replies display the author's Telegram account. Group admins can use /settopic, /removetopic, and /grouptopic to manage the confession destination.",
+      "You can send text, photos, videos, GIFs, and stickers for confessions and comments. Group members won't see your account. Group admins can use /settopic, /removetopic, and /grouptopic to manage the confession destination.",
   ),
 );
 
@@ -1002,9 +1054,14 @@ bot.command("unlinkgroup", async (ctx) => {
         "DELETE FROM anonymous_comments WHERE confession_id IN (SELECT id FROM confessions WHERE chat_id = ?)",
         [chatId],
       );
+      await tx.run(
+        "DELETE FROM submissions WHERE owner_id IN (SELECT owner_id FROM confessions WHERE chat_id = ?)",
+        [chatId],
+      );
       await tx.run("DELETE FROM confessions WHERE chat_id = ?", [chatId]);
       await tx.run("DELETE FROM `groups` WHERE chat_id = ?", [chatId]);
     });
+    await clearTopicSetup(chatId);
   } catch (error) {
     console.error(`Could not unlink group ${chatId}:`, error);
     return ctx.reply("I could not unlink this group. Please try again later.");
@@ -1067,8 +1124,8 @@ async function promptForComment(ctx, confessionId, parentCommentId = null) {
     return explainMembershipFailure(ctx, membership.unavailable);
 
   const prompt = parentCommentId
-    ? `Send your reply to comment #${parentCommentId} on #${confessionId}. It will appear under that comment in the bot's private thread. Send /cancel to stop.`
-    : `Send your comment for #${confessionId} as your next message. It will be saved and shown only in the bot's private thread, not in the group. Send /cancel to stop.`;
+    ? `Send your reply to comment #${parentCommentId} on #${confessionId} (text, photo, video, GIF, or sticker). It will appear under that comment in the bot's private thread. Send /cancel to stop.`
+    : `Send your comment for #${confessionId} as your next message (text, photo, video, GIF, or sticker). It will be saved and shown only in the bot's private thread, not in the group. Send /cancel to stop.`;
   clearPending(ctx);
   ctx.session.pendingCommentId = confessionId;
   if (parentCommentId) ctx.session.pendingCommentParentId = parentCommentId;
@@ -1100,9 +1157,94 @@ async function getDisplayProfile(userId) {
   };
 }
 
+async function sendConfessionView(ctx, confessionId) {
+  const post = await store.get(
+    "SELECT id, chat_id, kind, body, photo_file_id, media_type, media_file_id, owner_id, confession_number FROM confessions WHERE id = ? AND deleted = 0",
+    [confessionId],
+  );
+  if (!post) {
+    const msg = "This post is no longer available.";
+    if (ctx.callbackQuery) return ctx.answerCbQuery(msg, { show_alert: true });
+    return ctx.reply(msg);
+  }
+  const membership = await checkGroupMembership(ctx, post.chat_id);
+  if (!membership.allowed) {
+    const msg = membership.unavailable
+      ? "I could not verify your group membership. Please try again later."
+      : "Only members of this group can view confessions.";
+    if (ctx.callbackQuery) return ctx.answerCbQuery(msg, { show_alert: true });
+    return ctx.reply(msg);
+  }
+  const countRow = await store.get(
+    "SELECT COUNT(*) AS total FROM anonymous_comments WHERE confession_id = ? AND deleted = 0",
+    [confessionId],
+  );
+  const count = Number(countRow?.total || 0);
+
+  if (ctx.session?.commentViewMessageIds?.length) {
+    for (const msgId of ctx.session.commentViewMessageIds) {
+      await ctx.telegram.deleteMessage(ctx.from.id, msgId).catch(() => {});
+    }
+    ctx.session.commentViewMessageIds = [];
+  }
+
+  const isOwner = Number(post.owner_id) === Number(ctx.from.id);
+  const label = post.kind === "confession" ? "Confession" : "Vent";
+  const confessionNumber = Number(post.confession_number || post.id);
+  const content = `<b>${label} #${confessionNumber}</b>${post.body ? `\n\n${escapeHtml(post.body)}` : ""}`;
+  const keyboard = confessionViewKeyboard(confessionId, count, isOwner);
+
+  const messageIds = [];
+  const mediaType = post.media_type || (post.photo_file_id ? "photo" : "text");
+  const mediaFileId = post.media_file_id || post.photo_file_id;
+
+  try {
+    if (mediaType === "photo" && mediaFileId) {
+      const sent = await ctx.telegram.sendPhoto(ctx.from.id, mediaFileId, {
+        caption: content,
+        parse_mode: "HTML",
+        ...keyboard,
+      });
+      messageIds.push(sent.message_id);
+    } else if (mediaType === "video" && mediaFileId) {
+      const sent = await ctx.telegram.sendVideo(ctx.from.id, mediaFileId, {
+        caption: content,
+        parse_mode: "HTML",
+        ...keyboard,
+      });
+      messageIds.push(sent.message_id);
+    } else if (mediaType === "animation" && mediaFileId) {
+      const sent = await ctx.telegram.sendAnimation(ctx.from.id, mediaFileId, {
+        caption: content,
+        parse_mode: "HTML",
+        ...keyboard,
+      });
+      messageIds.push(sent.message_id);
+    } else if (mediaType === "sticker" && mediaFileId) {
+      const s = await ctx.telegram.sendSticker(ctx.from.id, mediaFileId);
+      messageIds.push(s.message_id);
+      const sent = await ctx.telegram.sendMessage(ctx.from.id, content, {
+        parse_mode: "HTML",
+        ...keyboard,
+      });
+      messageIds.push(sent.message_id);
+    } else {
+      const sent = await ctx.telegram.sendMessage(ctx.from.id, content, {
+        parse_mode: "HTML",
+        ...keyboard,
+      });
+      messageIds.push(sent.message_id);
+    }
+    ctx.session.commentViewMessageIds = messageIds;
+  } catch (err) {
+    console.error(`Error displaying confession view for ${confessionId}:`, err);
+    return ctx.reply("I could not display that confession right now.");
+  }
+}
+
 async function buildCommentPage(ctx, confessionId, pageNumber = 0) {
   const post = await store.get(
-    "SELECT id, chat_id, kind, body, owner_id FROM confessions WHERE id = ? AND deleted = 0",
+    "SELECT id, chat_id, kind, body, owner_id, confession_number FROM confessions WHERE id = ? AND deleted = 0",
     [confessionId],
   );
   if (!post) return { error: "This post is no longer available." };
@@ -1118,10 +1260,18 @@ async function buildCommentPage(ctx, confessionId, pageNumber = 0) {
     [confessionId],
   );
   const roots = await store.all(
-    "SELECT id, body, commenter_id FROM anonymous_comments WHERE confession_id = ? AND parent_id IS NULL AND deleted = 0 ORDER BY id ASC",
+    "SELECT id, body, commenter_id, media_type, media_file_id FROM anonymous_comments WHERE confession_id = ? AND parent_id IS NULL AND deleted = 0 ORDER BY id ASC",
     [confessionId],
   );
   const count = Number(countRow?.total || 0);
+  const label = post.kind === "confession" ? "Confession" : "Vent";
+  const confessionNumber = Number(post.confession_number || post.id);
+
+  if (count === 0) {
+    const heading = `<b>Comments on ${label} #${confessionNumber}</b>\n\nNo comments yet.`;
+    return { post, body: heading, count: 0, page: 0, pageCount: 0, cards: [] };
+  }
+
   const pageCount = Math.max(1, Math.ceil(roots.length / 5));
   const page = Math.min(Math.max(0, pageNumber), pageCount - 1);
   const pageComments = roots.slice(page * 5, page * 5 + 5);
@@ -1151,10 +1301,20 @@ async function buildCommentPage(ctx, confessionId, pageNumber = 0) {
     const userLabel = isConfessor
       ? "Confessor"
       : `${escapeHtml(profile.name)}${profile.badge ? ` ${profile.badge}` : ""} · Net likes: ${profile.score}`;
+    let mediaNote = "";
+    if (comment.media_type && comment.media_type !== "text") {
+      mediaNote = `\n<i>[Attached ${comment.media_type}]</i>`;
+    }
+    const commentText = comment.body ? escapeHtml(comment.body) : "";
+    const fullBody = [commentText, mediaNote].filter(Boolean).join("\n");
     cards.push({
+      id: number,
+      commenter_id: comment.commenter_id,
+      media_type: comment.media_type || "text",
+      media_file_id: comment.media_file_id,
       text: depth
-        ? `<b>Reply ${numberLabel}</b>\n\n${escapeHtml(comment.body)}\n\n<b>${userLabel}</b>`
-        : `<b>Comment ${numberLabel}</b>\n\n${escapeHtml(comment.body)}\n\n<b>${userLabel}</b>`,
+        ? `<b>Reply ${numberLabel}</b>\n\n${fullBody}\n\n<b>${userLabel}</b>`
+        : `<b>Comment ${numberLabel}</b>\n\n${fullBody}\n\n<b>${userLabel}</b>`,
       keyboard: commentCardKeyboard(
         number,
         comment.commenter_id,
@@ -1164,7 +1324,7 @@ async function buildCommentPage(ctx, confessionId, pageNumber = 0) {
       ),
     });
     const replies = await store.all(
-      "SELECT id, body, commenter_id, parent_id FROM anonymous_comments WHERE parent_id = ? AND deleted = 0 ORDER BY id ASC",
+      "SELECT id, body, commenter_id, parent_id, media_type, media_file_id FROM anonymous_comments WHERE parent_id = ? AND deleted = 0 ORDER BY id ASC",
       [number],
     );
     for (let index = 0; index < replies.length; index++) {
@@ -1178,16 +1338,16 @@ async function buildCommentPage(ctx, confessionId, pageNumber = 0) {
   }
   for (const root of pageComments)
     await appendCommentCard(root, 0, 0, rootNumberById.get(Number(root.id)));
-  const label = post.kind === "confession" ? "Confession" : "Vent";
-  const confessionNumber = Number(post.confession_number || post.id);
-  const heading = `<b>${label} #${confessionNumber}</b>\n\n${escapeHtml(post.body)}\n\n<b>Comments (${count}) · Page ${page + 1}/${pageCount}</b>`;
-  const body = roots.length ? heading : `${heading}\n\nNo comments yet.`;
-  return { post, body, count, page, pageCount, cards };
+  const heading = `<b>Comments on ${label} #${confessionNumber} (${count}) · Page ${page + 1}/${pageCount}</b>`;
+  return { post, body: heading, count, page, pageCount, cards };
 }
 
 async function sendCommentList(ctx, confessionId, pageNumber = 0) {
   const page = await buildCommentPage(ctx, confessionId, pageNumber);
-  if (page.error) return ctx.reply(page.error);
+  if (page.error) {
+    if (ctx.callbackQuery) return ctx.answerCbQuery(page.error, { show_alert: true });
+    return ctx.reply(page.error);
+  }
   try {
     if (ctx.session?.commentViewMessageIds?.length) {
       for (const messageId of ctx.session.commentViewMessageIds) {
@@ -1195,32 +1355,84 @@ async function sendCommentList(ctx, confessionId, pageNumber = 0) {
           .deleteMessage(ctx.from.id, messageId)
           .catch(() => {});
       }
+      ctx.session.commentViewMessageIds = [];
     }
     const messageIds = [];
+
+    // If there are no comments, show "No comments yet." with "Add comment" and "Back to Confession"
+    if (page.count === 0) {
+      const emptyHeader = await ctx.telegram.sendMessage(
+        ctx.from.id,
+        page.body,
+        {
+          parse_mode: "HTML",
+          ...commentsHeaderKeyboard(confessionId),
+        },
+      );
+      messageIds.push(emptyHeader.message_id);
+      ctx.session.commentViewMessageIds = messageIds;
+      return;
+    }
+
     const header = await ctx.telegram.sendMessage(ctx.from.id, page.body, {
       parse_mode: "HTML",
       ...commentsHeaderKeyboard(confessionId),
     });
     messageIds.push(header.message_id);
+
     for (const card of page.cards) {
-      const sent = await ctx.telegram.sendMessage(ctx.from.id, card.text, {
-        parse_mode: "HTML",
-        ...card.keyboard,
-      });
-      messageIds.push(sent.message_id);
+      if (card.media_type === "photo" && card.media_file_id) {
+        const sent = await ctx.telegram.sendPhoto(ctx.from.id, card.media_file_id, {
+          caption: card.text,
+          parse_mode: "HTML",
+          ...card.keyboard,
+        });
+        messageIds.push(sent.message_id);
+      } else if (card.media_type === "video" && card.media_file_id) {
+        const sent = await ctx.telegram.sendVideo(ctx.from.id, card.media_file_id, {
+          caption: card.text,
+          parse_mode: "HTML",
+          ...card.keyboard,
+        });
+        messageIds.push(sent.message_id);
+      } else if (card.media_type === "animation" && card.media_file_id) {
+        const sent = await ctx.telegram.sendAnimation(ctx.from.id, card.media_file_id, {
+          caption: card.text,
+          parse_mode: "HTML",
+          ...card.keyboard,
+        });
+        messageIds.push(sent.message_id);
+      } else if (card.media_type === "sticker" && card.media_file_id) {
+        const s = await ctx.telegram.sendSticker(ctx.from.id, card.media_file_id);
+        messageIds.push(s.message_id);
+        const sent = await ctx.telegram.sendMessage(ctx.from.id, card.text, {
+          parse_mode: "HTML",
+          ...card.keyboard,
+        });
+        messageIds.push(sent.message_id);
+      } else {
+        const sent = await ctx.telegram.sendMessage(ctx.from.id, card.text, {
+          parse_mode: "HTML",
+          ...card.keyboard,
+        });
+        messageIds.push(sent.message_id);
+      }
     }
-    const footerKeyboard = commentsPageKeyboard(
-      confessionId,
-      page.page,
-      page.pageCount,
-    );
-    if (footerKeyboard) {
-      const footer = await ctx.telegram.sendMessage(
-        ctx.from.id,
-        `Page ${page.page + 1} of ${page.pageCount}`,
-        footerKeyboard,
+
+    if (page.pageCount > 1) {
+      const footerKeyboard = commentsPageKeyboard(
+        confessionId,
+        page.page,
+        page.pageCount,
       );
-      messageIds.push(footer.message_id);
+      if (footerKeyboard) {
+        const footer = await ctx.telegram.sendMessage(
+          ctx.from.id,
+          `Page ${page.page + 1} of ${page.pageCount}`,
+          footerKeyboard,
+        );
+        messageIds.push(footer.message_id);
+      }
     }
     ctx.session.commentViewMessageIds = messageIds;
     return;
@@ -1266,7 +1478,27 @@ bot.command("comments", async (ctx) => {
   const idText = ctx.message.text.split(/\s+/)[1] || "";
   if (!/^\d+$/.test(idText)) return ctx.reply("Usage: /comments <ID>.");
   const confessionId = Number(idText);
-  return sendCommentList(ctx, confessionId, 0);
+  return sendConfessionView(ctx, confessionId);
+});
+
+bot.action(/^readcomments:(\d+)(?::(\d+))?$/, async (ctx) => {
+  if (!isPrivate(ctx)) {
+    return ctx.answerCbQuery("Open comments in your private chat with the bot.", {
+      show_alert: true,
+    });
+  }
+  await acknowledgeCallback(ctx);
+  return sendCommentList(ctx, Number(ctx.match[1]), Number(ctx.match[2] || 0));
+});
+
+bot.action(/^backtoconfession:(\d+)$/, async (ctx) => {
+  if (!isPrivate(ctx)) {
+    return ctx.answerCbQuery("Open this in your private chat with the bot.", {
+      show_alert: true,
+    });
+  }
+  await acknowledgeCallback(ctx);
+  return sendConfessionView(ctx, Number(ctx.match[1]));
 });
 
 bot.action(/^commentspage:(\d+):(\d+)$/, async (ctx) => {
@@ -1516,6 +1748,8 @@ async function requestDelete(ctx, id) {
   try {
     if (row.message_id)
       await ctx.telegram.deleteMessage(row.chat_id, row.message_id);
+    if (row.extra_message_id)
+      await ctx.telegram.deleteMessage(row.chat_id, row.extra_message_id).catch(() => {});
   } catch (error) {
     const desc = String(error?.description || error?.message || "");
     if (!/message to delete not found/i.test(desc)) {
@@ -1624,7 +1858,7 @@ bot.action(/^confirmconfession:(\d+)$/, async (ctx) => {
   await acknowledgeCallback(ctx);
   const id = Number(ctx.match[1]);
   const row = await store.get(
-    "SELECT id, chat_id, kind, body, photo_file_id, owner_id, status FROM confessions WHERE id = ? AND owner_id = ? AND status = 'pending'",
+    "SELECT id, chat_id, kind, body, photo_file_id, media_type, media_file_id, owner_id, status FROM confessions WHERE id = ? AND owner_id = ? AND status = 'pending'",
     [id, ctx.from.id],
   );
   if (!row) {
@@ -1663,13 +1897,40 @@ bot.action(/^confirmconfession:(\d+)$/, async (ctx) => {
     [confessionNumber + 1, row.chat_id],
   );
   const label = row.kind === "confession" ? "Confession" : "Vent";
-  const content = `<b>${label} #${confessionNumber}</b>\n\n${escapeHtml(row.body)}`;
+  const content = `<b>${label} #${confessionNumber}</b>${row.body ? `\n\n${escapeHtml(row.body)}` : ""}`;
   const topicOptions = group.topic_id == null ? {} : { message_thread_id: Number(group.topic_id) };
+  const mediaType = row.media_type || (row.photo_file_id ? "photo" : "text");
+  const mediaFileId = row.media_file_id || row.photo_file_id;
+
   try {
     let posted;
-    if (row.photo_file_id) {
-      posted = await ctx.telegram.sendPhoto(row.chat_id, row.photo_file_id, {
+    let extraMessageId = null;
+
+    if (mediaType === "photo" && mediaFileId) {
+      posted = await ctx.telegram.sendPhoto(row.chat_id, mediaFileId, {
         caption: content,
+        parse_mode: "HTML",
+        ...topicOptions,
+        ...commentsKeyboard(row.id, 0),
+      });
+    } else if (mediaType === "video" && mediaFileId) {
+      posted = await ctx.telegram.sendVideo(row.chat_id, mediaFileId, {
+        caption: content,
+        parse_mode: "HTML",
+        ...topicOptions,
+        ...commentsKeyboard(row.id, 0),
+      });
+    } else if (mediaType === "animation" && mediaFileId) {
+      posted = await ctx.telegram.sendAnimation(row.chat_id, mediaFileId, {
+        caption: content,
+        parse_mode: "HTML",
+        ...topicOptions,
+        ...commentsKeyboard(row.id, 0),
+      });
+    } else if (mediaType === "sticker" && mediaFileId) {
+      const s = await ctx.telegram.sendSticker(row.chat_id, mediaFileId, topicOptions);
+      extraMessageId = s.message_id;
+      posted = await ctx.telegram.sendMessage(row.chat_id, content, {
         parse_mode: "HTML",
         ...topicOptions,
         ...commentsKeyboard(row.id, 0),
@@ -1682,8 +1943,8 @@ bot.action(/^confirmconfession:(\d+)$/, async (ctx) => {
       });
     }
     await store.run(
-      "UPDATE confessions SET confession_number = ?, message_id = ? WHERE id = ? AND status = 'published'",
-      [confessionNumber, posted.message_id, id],
+      "UPDATE confessions SET confession_number = ?, message_id = ?, extra_message_id = ? WHERE id = ? AND status = 'published'",
+      [confessionNumber, posted.message_id, extraMessageId, id],
     );
     return ctx.reply(
       `Posted anonymously as #${confessionNumber}. You can delete it here at any time.`,
@@ -1726,15 +1987,54 @@ bot.action(/^cancelconfession:(\d+)$/, async (ctx) => {
   return ctx.reply("Submission cancelled; it was not published.");
 });
 
-async function submit(ctx, body, photoFileId = null) {
-  if (!isPrivate(ctx) || !ctx.session?.pendingKind) return;
+async function submit(ctx, body, mediaType = "text", mediaFileId = null) {
+  if (!isPrivate(ctx)) return;
   body = (body || "").trim();
-  if (!body) return ctx.reply("Please send text (or a photo with a caption).");
-  const allowedLength = photoFileId ? Math.min(maxLength, 900) : maxLength;
-  if (body.length > allowedLength)
+  const allowedLength = mediaFileId ? Math.min(maxLength, 1024) : maxLength;
+  if (!body && !mediaFileId) {
+    return ctx.reply("Please send text or attach media (photo, video, GIF, or sticker).");
+  }
+  if (body.length > allowedLength) {
     return ctx.reply(
       `That message is too long. Please keep it under ${allowedLength} characters.`,
     );
+  }
+
+  // If user sent text or media directly without /confess or /vent first:
+  if (!ctx.session?.pendingKind) {
+    const linkedGroup = await store.get(
+      "SELECT chat_id, title FROM `groups` WHERE linked_at > 0 ORDER BY linked_at DESC LIMIT 1",
+    );
+    if (!linkedGroup) {
+      return ctx.reply(
+        "No group is linked yet. Ask a group admin to run /setgroup in the group.",
+      );
+    }
+    const membership = await checkGroupMembership(ctx, linkedGroup.chat_id);
+    if (!membership.allowed) {
+      return explainMembershipFailure(ctx, membership.unavailable);
+    }
+    const existingPending = await store.get(
+      "SELECT id FROM confessions WHERE owner_id = ? AND status = 'pending'",
+      [ctx.from.id],
+    );
+    if (existingPending) {
+      return ctx.reply(
+        "You already have a submission waiting for confirmation. Please confirm or cancel it above, or send /cancel to discard it.",
+      );
+    }
+    ctx.session.directDraft = { body, mediaType, mediaFileId, targetChat: linkedGroup.chat_id };
+    return ctx.reply(
+      "Would you like to submit this as an anonymous Confession or Vent?",
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback("Confession", "directsubmit:confession"),
+          Markup.button.callback("Vent", "directsubmit:vent"),
+        ],
+        [Markup.button.callback("Cancel", "directsubmit:cancel")],
+      ]),
+    );
+  }
 
   const userId = ctx.from.id;
   const now = nowSeconds();
@@ -1758,8 +2058,9 @@ async function submit(ctx, body, photoFileId = null) {
     delete ctx.session.targetChat;
     return explainMembershipFailure(ctx, membership.unavailable);
   }
+  const photoFileId = mediaType === "photo" ? mediaFileId : null;
   const result = await store.run(
-    `INSERT INTO confessions(owner_id,owner_username,owner_first_name,owner_last_name,chat_id,kind,body,photo_file_id,created_at,status) VALUES(?,?,?,?,?,?,?,?,?,'pending')${store.kind === "postgres" ? " RETURNING id" : ""}`,
+    `INSERT INTO confessions(owner_id,owner_username,owner_first_name,owner_last_name,chat_id,kind,body,photo_file_id,media_type,media_file_id,created_at,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,'pending')${store.kind === "postgres" ? " RETURNING id" : ""}`,
     [
       userId,
       ctx.from.username || null,
@@ -1768,7 +2069,9 @@ async function submit(ctx, body, photoFileId = null) {
       targetChat,
       kind,
       body,
-      photoFileId || null,
+      photoFileId,
+      mediaType,
+      mediaFileId,
       now,
     ],
   );
@@ -1780,21 +2083,43 @@ async function submit(ctx, body, photoFileId = null) {
   delete ctx.session.pendingKind;
   delete ctx.session.targetChat;
   const label = kind === "confession" ? "Confession" : "Vent";
-  const photoNote = photoFileId ? " Your photo will be published with it." : "";
+  const mediaNote = mediaFileId ? ` Your ${mediaType} will be published with it.` : "";
+  const displayText = body ? `\n\n${escapeHtml(body)}` : (mediaFileId ? `\n\n<i>[Attached ${mediaType}]</i>` : "");
+
   return ctx.reply(
-    `Review your anonymous ${kind} before it is published:${photoNote}\n\n${escapeHtml(body)}\n\nConfirm to publish it anonymously to the group, or cancel to discard it.`,
+    `Review your anonymous ${label} before it is published:${mediaNote}${displayText}\n\nConfirm to publish it anonymously to the group, or cancel to discard it.`,
     { parse_mode: "HTML", ...confirmSubmissionKeyboard(id) },
   );
 }
 
-async function submitComment(ctx, body) {
+bot.action(/^directsubmit:(confession|vent|cancel)$/, async (ctx) => {
+  if (!isPrivate(ctx)) {
+    return ctx.answerCbQuery("Use this in your private chat.", { show_alert: true });
+  }
+  await acknowledgeCallback(ctx);
+  const action = ctx.match[1];
+  const draft = ctx.session?.directDraft;
+  delete ctx.session?.directDraft;
+  if (action === "cancel" || !draft) {
+    return ctx.reply("Submission cancelled.");
+  }
+  ctx.session.pendingKind = action;
+  ctx.session.targetChat = draft.targetChat;
+  return submit(ctx, draft.body, draft.mediaType, draft.mediaFileId);
+});
+
+async function submitComment(ctx, body, mediaType = "text", mediaFileId = null) {
   if (!isPrivate(ctx) || !ctx.session?.pendingCommentId) return;
   body = (body || "").trim();
-  if (!body) return ctx.reply("Please send your comment as text.");
-  if (body.length > maxLength)
+  const allowedLength = mediaFileId ? Math.min(maxLength, 1024) : maxLength;
+  if (!body && !mediaFileId) {
+    return ctx.reply("Please send your comment as text or attach media.");
+  }
+  if (body.length > allowedLength) {
     return ctx.reply(
-      `That comment is too long. Please keep it under ${maxLength} characters.`,
+      `That comment is too long. Please keep it under ${allowedLength} characters.`,
     );
+  }
 
   const confessionId = Number(ctx.session.pendingCommentId);
   const post = await store.get(
@@ -1814,7 +2139,13 @@ async function submitComment(ctx, body) {
     ignoreSubmissionCooldown: Number(post.owner_id) === Number(ctx.from.id),
   });
   if (limitMessage) return ctx.reply(limitMessage);
-  ctx.session.pendingCommentDraft = body;
+
+  ctx.session.pendingCommentDraft = {
+    body,
+    mediaType,
+    mediaFileId,
+  };
+
   const confessionPost = await store.get(
     "SELECT confession_number FROM confessions WHERE id = ?",
     [confessionId],
@@ -1823,8 +2154,11 @@ async function submitComment(ctx, body) {
   const replyContext = ctx.session.pendingCommentParentId
     ? ` This is a reply to comment #${ctx.session.pendingCommentParentId}.`
     : "";
+  const mediaNote = mediaFileId ? ` [Attached ${mediaType}]` : "";
+  const displayText = body ? escapeHtml(body) : `<i>(Attached ${mediaType})</i>`;
+
   return ctx.reply(
-    `Preview your anonymous comment on #${confessionNumber}:${replyContext}\n\n${escapeHtml(body)}\n\nPost this comment? It will be visible in the bot to members who open the comments, and will not be posted in the group.`,
+    `Preview your anonymous comment on #${confessionNumber}:${replyContext}${mediaNote}\n\n${displayText}\n\nPost this comment? It will be visible in the bot to members who open the comments, and will not be posted in the group.`,
     { parse_mode: "HTML", ...confirmCommentKeyboard() },
   );
 }
@@ -1839,12 +2173,16 @@ bot.action("commentconfirm", async (ctx) => {
       show_alert: true,
     });
   }
-  await ctx.answerCbQuery();
+  await acknowledgeCallback(ctx);
   const confessionId = Number(ctx.session.pendingCommentId);
-  const body = ctx.session.pendingCommentDraft;
+  const draft = ctx.session.pendingCommentDraft;
+  const body = typeof draft === "string" ? draft : (draft.body || "");
+  const mediaType = typeof draft === "object" ? (draft.mediaType || "text") : "text";
+  const mediaFileId = typeof draft === "object" ? (draft.mediaFileId || null) : null;
   const parentCommentId = ctx.session.pendingCommentParentId
     ? Number(ctx.session.pendingCommentParentId)
     : null;
+
   const post = await store.get(
     "SELECT id, chat_id, message_id, owner_id, confession_number FROM confessions WHERE id = ? AND deleted = 0",
     [confessionId],
@@ -1874,9 +2212,10 @@ bot.action("commentconfirm", async (ctx) => {
     ignoreSubmissionCooldown: Number(post.owner_id) === Number(ctx.from.id),
   });
   if (limitMessage) return ctx.reply(limitMessage);
+
   await store.run(
-    "INSERT INTO anonymous_comments(confession_id,commenter_id,parent_id,body,created_at) VALUES(?,?,?,?,?)",
-    [confessionId, ctx.from.id, parentCommentId, body, nowSeconds()],
+    "INSERT INTO anonymous_comments(confession_id,commenter_id,parent_id,body,media_type,media_file_id,created_at) VALUES(?,?,?,?,?,?,?)",
+    [confessionId, ctx.from.id, parentCommentId, body, mediaType, mediaFileId, nowSeconds()],
   );
   await refreshCommentsButton(ctx.telegram, post);
   clearPending(ctx);
@@ -1896,16 +2235,6 @@ bot.action("commentcancel", async (ctx) => {
   delete ctx.session.pendingCommentId;
   delete ctx.session.pendingCommentParentId;
   return ctx.reply("Comment cancelled; it was not posted.");
-});
-
-bot.action(/^readcomments:(\d+)$/, async (ctx) => {
-  if (!isPrivate(ctx)) {
-    return ctx.answerCbQuery("Open comments in your private chat with the bot.", {
-      show_alert: true,
-    });
-  }
-  await ctx.answerCbQuery();
-  return sendCommentList(ctx, Number(ctx.match[1]), 0);
 });
 
 bot.action(/^deletecomment:(\d+)$/, async (ctx) => {
@@ -1938,32 +2267,140 @@ bot.action(/^deletecomment:(\d+)$/, async (ctx) => {
   return sendCommentList(ctx, Number(comment.confession_id), 0);
 });
 
+async function sendMyConfessionsPage(ctx, pageNumber = 0) {
+  if (!isPrivate(ctx)) {
+    return ctx.reply("Use /allMyConfessions in a private chat with me.");
+  }
+  const userId = ctx.from.id;
+  const confessions = await store.all(
+    "SELECT c.id, c.confession_number, c.kind, c.body, c.media_type, c.media_file_id, c.photo_file_id, c.created_at, " +
+    "(SELECT COUNT(*) FROM anonymous_comments WHERE confession_id = c.id AND deleted = 0) AS comment_count " +
+    "FROM confessions c " +
+    "WHERE c.owner_id = ? AND c.status = 'published' AND c.deleted = 0 " +
+    "ORDER BY c.id DESC",
+    [userId],
+  );
+  if (!confessions.length) {
+    return ctx.reply("You haven't submitted any confessions yet.");
+  }
+  const pageSize = 5;
+  const pageCount = Math.max(1, Math.ceil(confessions.length / pageSize));
+  const page = Math.min(Math.max(0, pageNumber), pageCount - 1);
+  const slice = confessions.slice(page * pageSize, page * pageSize + pageSize);
+
+  const lines = [
+    `<b>Your Confessions (${confessions.length}) · Page ${page + 1}/${pageCount}</b>\n`,
+  ];
+  const buttons = [];
+
+  for (const c of slice) {
+    const num = c.confession_number || c.id;
+    const kind = c.kind === "confession" ? "Confession" : "Vent";
+    const mType = c.media_type || (c.photo_file_id ? "photo" : "text");
+    let mediaTag = "[Text]";
+    if (mType === "photo") mediaTag = c.body ? "[Photo + Text]" : "[Photo]";
+    else if (mType === "video") mediaTag = c.body ? "[Video + Text]" : "[Video]";
+    else if (mType === "animation") mediaTag = c.body ? "[GIF + Text]" : "[GIF]";
+    else if (mType === "sticker") mediaTag = c.body ? "[Sticker + Text]" : "[Sticker]";
+
+    const excerpt = c.body
+      ? (c.body.length > 55 ? `${c.body.slice(0, 55)}…` : c.body)
+      : "(No text caption)";
+    const count = Number(c.comment_count || 0);
+
+    lines.push(`• <b>#${num}</b> (${kind}) — ${mediaTag}`);
+    lines.push(`  “${escapeHtml(excerpt)}”`);
+    lines.push(`  💬 ${count} ${count === 1 ? "comment" : "comments"}\n`);
+
+    buttons.push([Markup.button.callback(`View #${num}`, `viewmyconfession:${c.id}:${page}`)]);
+  }
+
+  const navRow = [];
+  if (page > 0) {
+    navRow.push(Markup.button.callback("Prev", `myconfessionspage:${page - 1}`));
+  }
+  if (page < pageCount - 1) {
+    navRow.push(Markup.button.callback("Next", `myconfessionspage:${page + 1}`));
+  }
+  if (navRow.length) buttons.push(navRow);
+
+  return ctx.reply(lines.join("\n"), {
+    parse_mode: "HTML",
+    ...Markup.inlineKeyboard(buttons),
+  });
+}
+
+bot.command(["allmyconfessions", "allMyConfessions"], (ctx) => sendMyConfessionsPage(ctx, 0));
+
+bot.action(/^myconfessionspage:(\d+)$/, async (ctx) => {
+  if (!isPrivate(ctx)) {
+    return ctx.answerCbQuery("Open this in your private chat.", { show_alert: true });
+  }
+  await acknowledgeCallback(ctx);
+  return sendMyConfessionsPage(ctx, Number(ctx.match[1]));
+});
+
+bot.action(/^viewmyconfession:(\d+)(?::(\d+))?$/, async (ctx) => {
+  if (!isPrivate(ctx)) {
+    return ctx.answerCbQuery("Open this in your private chat.", { show_alert: true });
+  }
+  await acknowledgeCallback(ctx);
+  const confessionId = Number(ctx.match[1]);
+  const post = await store.get(
+    "SELECT id, owner_id FROM confessions WHERE id = ? AND deleted = 0",
+    [confessionId],
+  );
+  if (!post || Number(post.owner_id) !== Number(ctx.from.id)) {
+    return ctx.reply("I could not find that confession belonging to your account.");
+  }
+  return sendConfessionView(ctx, confessionId);
+});
+
 bot.on("text", async (ctx, next) => {
   if (ctx.message.text.startsWith("/")) return next();
   if (isGroupChat(ctx) && await handleTopicSetupText(ctx)) return;
   if (ctx.session?.pendingCommentId)
-    return submitComment(ctx, ctx.message.text);
-  return submit(ctx, ctx.message.text);
+    return submitComment(ctx, ctx.message.text, "text", null);
+  return submit(ctx, ctx.message.text, "text", null);
 });
+
 bot.on("photo", (ctx) => {
   const fileId = ctx.message.photo.at(-1).file_id;
+  const caption = ctx.message.caption || "";
   if (ctx.session?.pendingCommentId)
-    return ctx.reply(
-      "Anonymous comments are text-only. Please send your comment as text.",
-    );
-  return submit(ctx, ctx.message.caption, fileId);
+    return submitComment(ctx, caption, "photo", fileId);
+  return submit(ctx, caption, "photo", fileId);
 });
-bot.on(
-  ["document", "video", "audio", "voice", "animation", "sticker"],
-  (ctx) => {
-    if (isPrivate(ctx) && ctx.session?.pendingKind)
-      return ctx.reply(
-        "Please send text or a photo with a caption. Other media is not supported.",
-      );
-    if (isPrivate(ctx) && ctx.session?.pendingCommentId)
-      return ctx.reply("Please send your anonymous comment as text.");
-  },
-);
+
+bot.on("video", (ctx) => {
+  const fileId = ctx.message.video.file_id;
+  const caption = ctx.message.caption || "";
+  if (ctx.session?.pendingCommentId)
+    return submitComment(ctx, caption, "video", fileId);
+  return submit(ctx, caption, "video", fileId);
+});
+
+bot.on("animation", (ctx) => {
+  const fileId = ctx.message.animation.file_id;
+  const caption = ctx.message.caption || "";
+  if (ctx.session?.pendingCommentId)
+    return submitComment(ctx, caption, "animation", fileId);
+  return submit(ctx, caption, "animation", fileId);
+});
+
+bot.on("sticker", (ctx) => {
+  const fileId = ctx.message.sticker.file_id;
+  const text = ctx.message.sticker?.emoji || "";
+  if (ctx.session?.pendingCommentId)
+    return submitComment(ctx, text, "sticker", fileId);
+  return submit(ctx, text, "sticker", fileId);
+});
+
+bot.on(["document", "audio", "voice"], (ctx) => {
+  if (isPrivate(ctx)) {
+    return ctx.reply("Unsupported media format. Please send text, photo, video, GIF, or sticker.");
+  }
+});
 
 bot.catch(async (error, ctx) => {
   // These are expected when Telegram times out a callback or a retried edit
@@ -2027,17 +2464,29 @@ async function main() {
   await polling;
 }
 
-main().catch(async (error) => {
-  if (Number(error?.response?.error_code || error?.code) === 409) {
-    console.error(
-      "Telegram rejected polling because another process is already using this bot token. Stop the other bot instance, then restart this one.",
-    );
-  } else {
-    console.error("The bot stopped during startup or polling:", error);
-  }
-  await store.close().catch(() => {});
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch(async (error) => {
+    if (Number(error?.response?.error_code || error?.code) === 409) {
+      console.error(
+        "Telegram rejected polling because another process is already using this bot token. Stop the other bot instance, then restart this one.",
+      );
+    } else {
+      console.error("The bot stopped during startup or polling:", error);
+    }
+    await store.close().catch(() => {});
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  Store,
+  store,
+  bot,
+  buildCommentPage,
+  sendCommentList,
+  sendConfessionView,
+  toPostgresSql,
+};
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
